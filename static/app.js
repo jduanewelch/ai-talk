@@ -474,6 +474,63 @@ function processTTSQueue() {
     }
 }
 
+// Show a high-tech sci-fi toast notification when a tool is invoked
+function showToolNotification(info) {
+    let container = document.getElementById('toast-container');
+    if (!container) {
+        container = document.createElement('div');
+        container.id = 'toast-container';
+        container.style.position = 'fixed';
+        container.style.bottom = '90px';
+        container.style.right = '20px';
+        container.style.zIndex = '10000';
+        container.style.display = 'flex';
+        container.style.flexDirection = 'column';
+        container.style.gap = '10px';
+        document.body.appendChild(container);
+    }
+    
+    const toast = document.createElement('div');
+    toast.className = 'hud-toast';
+    toast.style.background = 'rgba(2, 8, 19, 0.95)';
+    toast.style.border = '1px solid var(--neon-cyan)';
+    toast.style.color = '#fff';
+    toast.style.fontFamily = 'var(--font-mono)';
+    toast.style.fontSize = '12px';
+    toast.style.padding = '10px 15px';
+    toast.style.borderRadius = '4px';
+    toast.style.boxShadow = '0 0 15px rgba(0, 240, 255, 0.3), inset 0 0 10px rgba(0, 240, 255, 0.1)';
+    toast.style.opacity = '0';
+    toast.style.transform = 'translateY(10px)';
+    toast.style.transition = 'all 0.4s cubic-bezier(0.175, 0.885, 0.32, 1.275)';
+    toast.style.borderLeft = '4px solid var(--neon-cyan)';
+    toast.style.minWidth = '280px';
+    
+    toast.innerHTML = `
+        <div style="font-weight: bold; color: var(--neon-cyan); margin-bottom: 3px; letter-spacing: 1px; display: flex; align-items: center; gap: 8px;">
+            <i class="fa-solid fa-cogs" style="animation: rotate-clockwise 4s infinite linear;"></i> PROTOCOL INVOKED
+        </div>
+        <div style="color: var(--text-primary); font-family: monospace;">${info}</div>
+    `;
+    
+    container.appendChild(toast);
+    
+    // Trigger transition
+    setTimeout(() => {
+        toast.style.opacity = '1';
+        toast.style.transform = 'translateY(0)';
+    }, 50);
+    
+    // Remove toast
+    setTimeout(() => {
+        toast.style.opacity = '0';
+        toast.style.transform = 'translateY(-10px)';
+        setTimeout(() => {
+            toast.remove();
+        }, 400);
+    }, 4500);
+}
+
 // Send chat message to backend and stream response
 async function sendPrompt(text) {
     setAppState('thinking');
@@ -523,6 +580,12 @@ async function sendPrompt(text) {
             for (const line of lines) {
                 const sentence = line.trim();
                 if (sentence) {
+                    if (sentence.startsWith('[TOOL]')) {
+                        const toolInfo = sentence.replace('[TOOL]', '').trim();
+                        showToolNotification(toolInfo);
+                        continue;
+                    }
+                    
                     // Initialize the log element on the first sentence
                     if (!streamLog) {
                         streamLog = startStreamingLog("JARVIS", "ai");
@@ -543,14 +606,19 @@ async function sendPrompt(text) {
         // Process final remaining sentence in buffer
         if (buffer.trim()) {
             const sentence = buffer.trim();
-            if (!streamLog) {
-                streamLog = startStreamingLog("JARVIS", "ai");
-            }
-            streamLog.append(sentence);
-            fullResponse += sentence;
-            
-            if (voiceOutputToggle.checked) {
-                queueSentence(sentence);
+            if (sentence.startsWith('[TOOL]')) {
+                const toolInfo = sentence.replace('[TOOL]', '').trim();
+                showToolNotification(toolInfo);
+            } else {
+                if (!streamLog) {
+                    streamLog = startStreamingLog("JARVIS", "ai");
+                }
+                streamLog.append(sentence);
+                fullResponse += sentence;
+                
+                if (voiceOutputToggle.checked) {
+                    queueSentence(sentence);
+                }
             }
         }
         
@@ -818,3 +886,39 @@ function drawVisualizer() {
 
 // Start visualizer rendering loop
 drawVisualizer();
+
+// Fetch and update system telemetry
+async function updateTelemetry() {
+    try {
+        const res = await fetch('/api/telemetry');
+        if (!res.ok) return;
+        const data = await res.json();
+        
+        // Update DOM elements
+        const cpuVal = document.getElementById('telemetry-cpu');
+        const cpuBar = document.getElementById('telemetry-cpu-bar');
+        const ramVal = document.getElementById('telemetry-ram');
+        const ramBar = document.getElementById('telemetry-ram-bar');
+        const diskVal = document.getElementById('telemetry-disk');
+        const diskBar = document.getElementById('telemetry-disk-bar');
+        const tempVal = document.getElementById('telemetry-temp');
+        
+        if (cpuVal) cpuVal.textContent = `${Math.round(data.cpu)}%`;
+        if (cpuBar) cpuBar.style.width = `${data.cpu}%`;
+        
+        if (ramVal) ramVal.textContent = `${Math.round(data.ram)}%`;
+        if (ramBar) ramBar.style.width = `${data.ram}%`;
+        
+        if (diskVal) diskVal.textContent = `${Math.round(data.disk)}%`;
+        if (diskBar) diskBar.style.width = `${data.disk}%`;
+        
+        if (tempVal) tempVal.textContent = data.temp || 'N/A';
+    } catch (e) {
+        console.error("Failed to fetch system telemetry:", e);
+    }
+}
+
+// Update telemetry every 3 seconds
+setInterval(updateTelemetry, 3000);
+// Run immediately on load
+updateTelemetry();

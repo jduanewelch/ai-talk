@@ -60,8 +60,6 @@ async def list_models():
         # Fallback to a hardcoded list if Ollama is temporarily unreachable
         models = ["dolphin-llama3", "gemma2", "smallthinker"]
     
-    # Append Google Gemini models
-    models.extend(["gemini-2.5-flash", "gemini-2.5-pro", "gemini-2.0-flash"])
     return {"models": models}
 
 @app.get("/api/voices")
@@ -100,7 +98,10 @@ def clean_text_for_speech(text: str) -> str:
     return text
 
 # Helper tool functions for Jarvis
+ACTIVE_TOOL_CALLS = []
+
 def execute_command(command: str) -> str:
+    ACTIVE_TOOL_CALLS.append({"name": "execute_command", "params": f"command='{command}'"})
     import subprocess
     safe_bases = ['df', 'free', 'uptime', 'uname', 'acpi', 'date', 'ping', 'hostname', 'whoami', 'ls', 'cat', 'grep']
     parts = command.strip().split()
@@ -120,6 +121,7 @@ def execute_command(command: str) -> str:
         return f"Error: {e}"
 
 def open_application(app_name: str) -> str:
+    ACTIVE_TOOL_CALLS.append({"name": "open_application", "params": f"app_name='{app_name}'"})
     import subprocess
     import shlex
     cleaned = shlex.split(app_name)[0]
@@ -135,6 +137,7 @@ def open_application(app_name: str) -> str:
         return f"Error launching {cleaned}: {e}"
 
 def get_weather(city: str) -> str:
+    ACTIVE_TOOL_CALLS.append({"name": "get_weather", "params": f"city='{city}'"})
     import urllib.request
     import urllib.parse
     try:
@@ -146,6 +149,7 @@ def get_weather(city: str) -> str:
         return f"Error fetching weather: {e}"
 
 def get_system_telemetry() -> str:
+    ACTIVE_TOOL_CALLS.append({"name": "get_system_telemetry", "params": ""})
     import psutil
     try:
         # CPU Info
@@ -201,6 +205,7 @@ def get_system_telemetry() -> str:
         return f"Error gathering telemetry: {e}"
 
 def control_system_volume(action: str, value: int = None) -> str:
+    ACTIVE_TOOL_CALLS.append({"name": "control_system_volume", "params": f"action='{action}', value={value}"})
     import subprocess
     action = action.lower().strip()
     allowed_actions = ["up", "down", "mute", "unmute", "set", "status"]
@@ -330,81 +335,7 @@ OLLAMA_TOOLS = [
 @app.post("/api/chat/stream")
 async def chat_stream(request: ChatRequest):
     try:
-        # Handle Google Gemini models
-        if request.model.startswith("gemini-"):
-            env_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env")
-            load_dotenv(dotenv_path=env_path, override=True)
-            api_key = os.getenv("GEMINI_API_KEY")
-            if not api_key:
-                async def missing_key_gen():
-                    yield "I cannot connect to the Gemini protocols because your Gemini API key is missing. Please add your GEMINI_API_KEY to the dot env file.\n"
-                return StreamingResponse(missing_key_gen(), media_type="text/plain")
-            
-            try:
-                from google import genai
-                from google.genai import types
-                
-                client = genai.Client(api_key=api_key)
-                
-                gemini_history = []
-                for msg in request.messages[:-1]:
-                    role = msg.role if hasattr(msg, 'role') else msg.get('role')
-                    content = msg.content if hasattr(msg, 'content') else msg.get('content')
-                    if role in ["system", "tool"]:
-                        continue
-                    g_role = "model" if role == "assistant" else "user"
-                    gemini_history.append(
-                        types.Content(role=g_role, parts=[types.Part(text=content)])
-                    )
-                
-                chat_session = client.aio.chats.create(
-                    model=request.model,
-                    history=gemini_history,
-                    config=types.GenerateContentConfig(
-                        system_instruction=request.system_prompt,
-                        tools=[execute_command, open_application, get_weather, get_system_telemetry, control_system_volume]
-                    )
-                )
-                
-                last_msg = request.messages[-1]
-                last_content = last_msg.content if hasattr(last_msg, 'content') else last_msg.get('content')
-                
-                logger.info(f"Sending async streaming request to Gemini using model: {request.model}")
-                
-                async def gemini_event_generator():
-                    response_stream = await chat_session.send_message_stream(last_content)
-                    buffer = ""
-                    async for chunk in response_stream:
-                        if chunk.text:
-                            buffer += chunk.text
-                            while True:
-                                boundary_idx = -1
-                                for i in range(len(buffer)):
-                                    if buffer[i] in ['.', '!', '?', '\n']:
-                                        if i + 1 == len(buffer) or buffer[i+1].isspace():
-                                            boundary_idx = i
-                                            break
-                                if boundary_idx != -1:
-                                    sentence = buffer[:boundary_idx+1].strip()
-                                    buffer = buffer[boundary_idx+1:]
-                                    if sentence:
-                                        cleaned = clean_text_for_speech(sentence)
-                                        if cleaned:
-                                            yield cleaned + "\n"
-                                else:
-                                    break
-                    if buffer.strip():
-                        cleaned = clean_text_for_speech(buffer.strip())
-                        if cleaned:
-                            yield cleaned + "\n"
-                            
-                return StreamingResponse(gemini_event_generator(), media_type="text/plain")
-                
-            except Exception as e:
-                logger.error(f"Error in Gemini streaming chat: {e}")
-                async def err_gen():
-                    yield f"I encountered an error communicating with the Gemini servers: {str(e)}\n"
-                return StreamingResponse(err_gen(), media_type="text/plain")
+
 
         # Handle Ollama models
         formatted_messages = []
@@ -492,6 +423,11 @@ async def chat_stream(request: ChatRequest):
                             "content": result,
                             "name": tool_name
                         })
+                    
+                    while ACTIVE_TOOL_CALLS:
+                        tc = ACTIVE_TOOL_CALLS.pop(0)
+                        yield f"[TOOL] {tc['name']}({tc['params']})\n"
+                        
                     continue
                 else:
                     buffer = ""
@@ -532,64 +468,7 @@ async def chat_stream(request: ChatRequest):
 @app.post("/api/chat")
 async def chat(request: ChatRequest):
     try:
-        # Handle Google Gemini models
-        if request.model.startswith("gemini-"):
-            env_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env")
-            load_dotenv(dotenv_path=env_path, override=True)
-            api_key = os.getenv("GEMINI_API_KEY")
-            if not api_key:
-                return {
-                    "response": (
-                        "I cannot connect to the Gemini protocols because your Gemini API key is missing. "
-                        "Please add your GEMINI_API_KEY to the dot env file in the application directory."
-                    )
-                }
-            
-            try:
-                from google import genai
-                from google.genai import types
-                
-                client = genai.Client(api_key=api_key)
-                
-                # Format history for Gemini (excluding system prompt and tool results, which are handled in config/sdk)
-                gemini_history = []
-                for msg in request.messages[:-1]:
-                    role = msg.role if hasattr(msg, 'role') else msg.get('role')
-                    content = msg.content if hasattr(msg, 'content') else msg.get('content')
-                    
-                    if role in ["system", "tool"]:
-                        continue
-                    g_role = "model" if role == "assistant" else "user"
-                    gemini_history.append(
-                        types.Content(
-                            role=g_role,
-                            parts=[types.Part(text=content)]
-                        )
-                    )
-                
-                # Create chat session with automatic function calling enabled!
-                chat_session = client.chats.create(
-                    model=request.model,
-                    history=gemini_history,
-                    config=types.GenerateContentConfig(
-                        system_instruction=request.system_prompt,
-                        tools=[execute_command, open_application, get_weather, get_system_telemetry, control_system_volume]
-                    )
-                )
-                
-                last_msg = request.messages[-1]
-                last_content = last_msg.content if hasattr(last_msg, 'content') else last_msg.get('content')
-                
-                logger.info(f"Sending request to Gemini using model: {request.model}")
-                response = chat_session.send_message(last_content)
-                ai_response = response.text
-                
-                logger.info(f"Gemini response: {ai_response}")
-                return {"response": clean_text_for_speech(ai_response)}
-                
-            except Exception as e:
-                logger.error(f"Error in Gemini chat: {e}")
-                return {"response": f"I encountered an error communicating with the Gemini servers: {str(e)}"}
+
 
         # Construct the messages list with the system prompt first
         formatted_messages = []
@@ -696,6 +575,38 @@ async def text_to_speech(
     except Exception as e:
         logger.error(f"Error generating TTS: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/api/telemetry")
+async def api_telemetry():
+    import psutil
+    try:
+        cpu_percent = psutil.cpu_percent(interval=0.1)
+        mem = psutil.virtual_memory()
+        disk = psutil.disk_usage('/')
+        
+        temp_str = "N/A"
+        try:
+            temps = psutil.sensors_temperatures()
+            if temps:
+                for key in ['coretemp', 'cpu-thermal', 'k10temp', 'acpitz']:
+                    if key in temps:
+                        temp_str = f"{temps[key][0].current}°C"
+                        break
+                if temp_str == "N/A":
+                    first_key = list(temps.keys())[0]
+                    temp_str = f"{temps[first_key][0].current}°C"
+        except Exception:
+            pass
+            
+        return {
+            "cpu": cpu_percent,
+            "ram": mem.percent,
+            "disk": disk.percent,
+            "temp": temp_str
+        }
+    except Exception as e:
+        logger.error(f"Error gathering API telemetry: {e}")
+        return {"cpu": 0, "ram": 0, "disk": 0, "temp": "N/A"}
 
 # Mount static files (must be at the end)
 app.mount("/", StaticFiles(directory="static"), name="static")

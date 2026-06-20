@@ -8,7 +8,7 @@
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@400;500;700;900&family=Rajdhani:wght@500;600;700&family=Share+Tech+Mono&display=swap" rel="stylesheet">
-    <link rel="stylesheet" href="style.css">
+    <link rel="stylesheet" href="style.css?v=2">
     <!-- FontAwesome for high-tech icons -->
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
 </head>
@@ -145,6 +145,42 @@
                         <div class="stat-row">
                             <span class="stat-name">WEBAUDIO LINK</span>
                             <span class="stat-value" id="audio-status">STANDBY</span>
+                        </div>
+                    </div>
+
+                    <!-- Real-Time Telemetry -->
+                    <div class="telemetry-stats">
+                        <div class="diagnostic-header">LIVE SYSTEM TELEMETRY</div>
+                        <div class="telemetry-item">
+                            <div class="telemetry-info">
+                                <span class="telemetry-name">CPU LOAD</span>
+                                <span class="telemetry-value" id="telemetry-cpu">0%</span>
+                            </div>
+                            <div class="telemetry-bar-container">
+                                <div class="telemetry-bar" id="telemetry-cpu-bar" style="width: 0%;"></div>
+                            </div>
+                        </div>
+                        <div class="telemetry-item">
+                            <div class="telemetry-info">
+                                <span class="telemetry-name">RAM ALLOCATION</span>
+                                <span class="telemetry-value" id="telemetry-ram">0%</span>
+                            </div>
+                            <div class="telemetry-bar-container">
+                                <div class="telemetry-bar" id="telemetry-ram-bar" style="width: 0%;"></div>
+                            </div>
+                        </div>
+                        <div class="telemetry-item">
+                            <div class="telemetry-info">
+                                <span class="telemetry-name">DISK STORAGE</span>
+                                <span class="telemetry-value" id="telemetry-disk">0%</span>
+                            </div>
+                            <div class="telemetry-bar-container">
+                                <div class="telemetry-bar" id="telemetry-disk-bar" style="width: 0%;"></div>
+                            </div>
+                        </div>
+                        <div class="stat-row" style="margin-top: 10px; margin-bottom: 0;">
+                            <span class="stat-name">CPU TEMPERATURE</span>
+                            <span class="stat-value" id="telemetry-temp">N/A</span>
                         </div>
                     </div>
                 </div>
