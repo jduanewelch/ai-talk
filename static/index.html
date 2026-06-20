@@ -1,0 +1,170 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>JARVIS // AI Voice Assistant</title>
+    <!-- Google Fonts for High-Tech Sci-Fi look -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@400;500;700;900&family=Rajdhani:wght@500;600;700&family=Share+Tech+Mono&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="style.css">
+    <!-- FontAwesome for high-tech icons -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+</head>
+<body>
+    <div class="hud-container">
+        <!-- Sci-Fi Scanlines Effect -->
+        <div class="scanlines"></div>
+        <div class="hologram-glow"></div>
+
+        <!-- Header -->
+        <header class="hud-header">
+            <div class="header-left">
+                <div class="system-logo">
+                    <span class="logo-icon"><i class="fa-solid fa-microchip"></i></span>
+                    <span class="logo-text">J.A.R.V.I.S.</span>
+                </div>
+                <div class="system-tagline">HOME COGNITIVE PROTOCOL // v4.2</div>
+            </div>
+            <div class="header-right">
+                <div class="system-status">
+                    <span class="status-dot green"></span>
+                    <span class="status-text" id="connection-status">SERVER ONLINE</span>
+                </div>
+                <div class="time-display" id="time-display">00:00:00</div>
+            </div>
+        </header>
+
+        <!-- Main Workspace -->
+        <main class="hud-main">
+            <!-- Left Side: Conversation Log -->
+            <section class="hud-panel console-panel">
+                <div class="panel-header">
+                    <h3><i class="fa-solid fa-terminal"></i> TRANSMISSION LOG</h3>
+                    <button class="clear-log-btn" id="clear-log" title="Clear Log"><i class="fa-solid fa-trash-can"></i></button>
+                </div>
+                <div class="panel-content scrollable" id="transcript-container">
+                    <div class="log-message system">
+                        <span class="timestamp">[00:00:00]</span>
+                        <span class="sender">SYSTEM:</span>
+                        <span class="content">Jarvis initialized. Awaiting voice protocols...</span>
+                    </div>
+                </div>
+            </section>
+
+            <!-- Center: Visualizer / Arc Reactor -->
+            <section class="center-stage">
+                <div class="visualizer-container">
+                    <div class="visualizer-ring ring-outer"></div>
+                    <div class="visualizer-ring ring-middle"></div>
+                    <div class="visualizer-ring ring-inner"></div>
+                    
+                    <!-- Canvas for actual Web Audio visualizer -->
+                    <canvas id="visualizer-canvas" width="400" height="400"></canvas>
+                    
+                    <!-- Center Core Button -->
+                    <button class="core-button" id="interaction-button">
+                        <div class="core-inner">
+                            <i class="fa-solid fa-microphone" id="mic-icon"></i>
+                        </div>
+                    </button>
+                </div>
+                <div class="hud-state-display">
+                    <div class="state-label" id="state-label">STANDBY</div>
+                    <div class="state-sub" id="state-sub">CLICK CORE TO INITIALIZE LINK</div>
+                </div>
+            </section>
+
+            <!-- Right Side: Diagnostics & Control -->
+            <section class="hud-panel diagnostics-panel">
+                <div class="panel-header">
+                    <h3><i class="fa-solid fa-sliders"></i> INTERFACE PROTOCOLS</h3>
+                </div>
+                <div class="panel-content">
+                    <!-- Model Selection -->
+                    <div class="control-group">
+                        <label for="model-select"><i class="fa-solid fa-brain"></i> COGNITIVE MODEL</label>
+                        <select id="model-select" class="hud-select">
+                            <!-- Populated dynamically -->
+                            <option value="dolphin-llama3">dolphin-llama3 (Unfiltered)</option>
+                        </select>
+                    </div>
+
+                    <!-- Voice Selection -->
+                    <div class="control-group">
+                        <label for="voice-select"><i class="fa-solid fa-volume-high"></i> VOCAL SYNTHESIS</label>
+                        <select id="voice-select" class="hud-select">
+                            <!-- Populated dynamically -->
+                        </select>
+                    </div>
+
+                    <!-- Voice Speed (Rate) -->
+                    <div class="control-group">
+                        <label for="rate-slider"><i class="fa-solid fa-gauge-high"></i> VOCAL SPEED: <span id="rate-value">+10%</span></label>
+                        <input type="range" id="rate-slider" min="-20" max="60" value="10" step="5" class="hud-slider">
+                    </div>
+
+                    <!-- Conversation Mode -->
+                    <div class="control-group">
+                        <label><i class="fa-solid fa-toggle-on"></i> RUNTIME BEHAVIORS</label>
+                        <div class="toggle-container">
+                            <span class="toggle-label">Continuous Conversation</span>
+                            <label class="hud-switch">
+                                <input type="checkbox" id="continuous-listening-toggle">
+                                <span class="slider"></span>
+                            </label>
+                        </div>
+                        <div class="toggle-container">
+                            <span class="toggle-label">Wake Word ("Jarvis")</span>
+                            <label class="hud-switch">
+                                <input type="checkbox" id="wakeword-toggle">
+                                <span class="slider"></span>
+                            </label>
+                        </div>
+                        <div class="toggle-container">
+                            <span class="toggle-label">Voice Synthesis Output</span>
+                            <label class="hud-switch">
+                                <input type="checkbox" id="voice-output-toggle" checked>
+                                <span class="slider"></span>
+                            </label>
+                        </div>
+                    </div>
+
+                    <!-- System Diagnostics -->
+                    <div class="diagnostic-stats">
+                        <div class="diagnostic-header">SYSTEM DIAGNOSTICS</div>
+                        <div class="stat-row">
+                            <span class="stat-name">OLLAMA ENGINE</span>
+                            <span class="stat-value green" id="ollama-status">READY</span>
+                        </div>
+                        <div class="stat-row">
+                            <span class="stat-name">MICROPHONE</span>
+                            <span class="stat-value" id="mic-status">DISCONNECTED</span>
+                        </div>
+                        <div class="stat-row">
+                            <span class="stat-name">WEBAUDIO LINK</span>
+                            <span class="stat-value" id="audio-status">STANDBY</span>
+                        </div>
+                    </div>
+                </div>
+            </section>
+        </main>
+
+        <!-- Footer / Keyboard Input -->
+        <footer class="hud-footer">
+            <div class="keyboard-input-container">
+                <span class="prompt-arrow">&gt;</span>
+                <input type="text" id="keyboard-input" placeholder="ENTER MANUAL OVERRIDE COMMAND (OR SPEAK)..." />
+                <button id="send-btn" class="hud-btn"><i class="fa-solid fa-paper-plane"></i></button>
+            </div>
+            <div class="hud-keyboard-tip">HOLD [SPACEBAR] TO SPEAK (PUSH-TO-TALK) // SAY "JARVIS..." (WAKE WORD)</div>
+        </footer>
+    </div>
+
+    <!-- Hidden audio element for speech synthesis playback -->
+    <audio id="tts-audio" style="display: none;"></audio>
+
+    <script src="app.js"></script>
+</body>
+</html>
