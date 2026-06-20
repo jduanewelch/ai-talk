@@ -145,10 +145,100 @@ def get_weather(city: str) -> str:
     except Exception as e:
         return f"Error fetching weather: {e}"
 
+def get_system_telemetry() -> str:
+    import psutil
+    try:
+        # CPU Info
+        cpu_percent = psutil.cpu_percent(interval=0.1)
+        cpu_cores = psutil.cpu_count(logical=True)
+        
+        # Memory Info
+        mem = psutil.virtual_memory()
+        mem_total_gb = round(mem.total / (1024**3), 2)
+        mem_used_gb = round(mem.used / (1024**3), 2)
+        mem_percent = mem.percent
+        
+        # Disk Info
+        disk = psutil.disk_usage('/')
+        disk_total_gb = round(disk.total / (1024**3), 2)
+        disk_used_gb = round(disk.used / (1024**3), 2)
+        disk_percent = disk.percent
+        
+        # Battery Info
+        battery_str = "N/A"
+        try:
+            battery = psutil.sensors_battery()
+            if battery:
+                battery_str = f"{battery.percent}% ({'Charging' if battery.power_plugged else 'Discharging'}, {round(battery.secsleft / 60) if battery.secsleft != -1 and battery.secsleft != -2 else 'calculating'} mins remaining)"
+        except Exception:
+            pass
+            
+        # CPU Temperature Info
+        temp_str = "N/A"
+        try:
+            temps = psutil.sensors_temperatures()
+            if temps:
+                for key in ['coretemp', 'cpu-thermal', 'k10temp', 'acpitz']:
+                    if key in temps:
+                        temp_str = f"{temps[key][0].current}°C"
+                        break
+                if temp_str == "N/A":
+                    first_key = list(temps.keys())[0]
+                    temp_str = f"{temps[first_key][0].current}°C"
+        except Exception:
+            pass
+            
+        telemetry = (
+            f"SYSTEM TELEMETRY DIAGNOSTICS:\n"
+            f"- CPU Usage: {cpu_percent}% (Cores: {cpu_cores})\n"
+            f"- CPU Temp: {temp_str}\n"
+            f"- RAM Usage: {mem_percent}% ({mem_used_gb}GB / {mem_total_gb}GB)\n"
+            f"- Disk Space: {disk_percent}% ({disk_used_gb}GB used / {disk_total_gb}GB total)\n"
+            f"- Battery: {battery_str}"
+        )
+        return telemetry
+    except Exception as e:
+        return f"Error gathering telemetry: {e}"
+
+def control_system_volume(action: str, value: int = None) -> str:
+    import subprocess
+    action = action.lower().strip()
+    allowed_actions = ["up", "down", "mute", "unmute", "set", "status"]
+    if action not in allowed_actions:
+        return f"Error: Action '{action}' is invalid. Allowed: up, down, mute, unmute, set, status."
+        
+    try:
+        if action == "mute":
+            subprocess.run("amixer set Master mute", shell=True, capture_output=True, text=True)
+            return "System muted successfully."
+        elif action == "unmute":
+            subprocess.run("amixer set Master unmute", shell=True, capture_output=True, text=True)
+            return "System unmuted successfully."
+        elif action == "status":
+            res = subprocess.run("amixer get Master", shell=True, capture_output=True, text=True)
+            return f"Volume Status:\n{res.stdout}"
+        elif action == "up":
+            amount = value if value is not None else 5
+            subprocess.run(f"amixer set Master {amount}%+", shell=True, capture_output=True, text=True)
+            return f"System volume increased by {amount}%."
+        elif action == "down":
+            amount = value if value is not None else 5
+            subprocess.run(f"amixer set Master {amount}%-", shell=True, capture_output=True, text=True)
+            return f"System volume decreased by {amount}%."
+        elif action == "set":
+            if value is None or not (0 <= value <= 100):
+                return "Error: A valid volume percentage between 0 and 100 must be specified for the 'set' action."
+            subprocess.run(f"amixer set Master {value}%", shell=True, capture_output=True, text=True)
+            return f"System volume set to {value}%."
+    except Exception as e:
+        return f"Error controlling volume: {e}"
+
 AVAILABLE_TOOLS = {
     'execute_command': execute_command,
     'open_application': open_application,
-    'get_weather': get_weather
+    'get_weather': get_weather,
+    'get_system_telemetry': get_system_telemetry,
+    'control_system_volume': control_system_volume
 }
 
 OLLAMA_TOOLS = [
@@ -202,8 +292,242 @@ OLLAMA_TOOLS = [
                 'required': ['city'],
             },
         },
+    },
+    {
+        'type': 'function',
+        'function': {
+            'name': 'get_system_telemetry',
+            'description': 'Retrieve system telemetry diagnostics (CPU usage, CPU temperature, RAM usage, Disk space, and battery status).',
+            'parameters': {
+                'type': 'object',
+                'properties': {},
+            },
+        },
+    },
+    {
+        'type': 'function',
+        'function': {
+            'name': 'control_system_volume',
+            'description': 'Control the host system audio volume and mute state.',
+            'parameters': {
+                'type': 'object',
+                'properties': {
+                    'action': {
+                        'type': 'string',
+                        'description': 'The volume control action to perform. Allowed values: status, up, down, set, mute, unmute.',
+                    },
+                    'value': {
+                        'type': 'integer',
+                        'description': 'Optional integer volume percentage (0 to 100). Required if action is "set", optional if action is "up" or "down".',
+                    },
+                },
+                'required': ['action'],
+            },
+        },
     }
 ]
+
+@app.post("/api/chat/stream")
+async def chat_stream(request: ChatRequest):
+    try:
+        # Handle Google Gemini models
+        if request.model.startswith("gemini-"):
+            env_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env")
+            load_dotenv(dotenv_path=env_path, override=True)
+            api_key = os.getenv("GEMINI_API_KEY")
+            if not api_key:
+                async def missing_key_gen():
+                    yield "I cannot connect to the Gemini protocols because your Gemini API key is missing. Please add your GEMINI_API_KEY to the dot env file.\n"
+                return StreamingResponse(missing_key_gen(), media_type="text/plain")
+            
+            try:
+                from google import genai
+                from google.genai import types
+                
+                client = genai.Client(api_key=api_key)
+                
+                gemini_history = []
+                for msg in request.messages[:-1]:
+                    role = msg.role if hasattr(msg, 'role') else msg.get('role')
+                    content = msg.content if hasattr(msg, 'content') else msg.get('content')
+                    if role in ["system", "tool"]:
+                        continue
+                    g_role = "model" if role == "assistant" else "user"
+                    gemini_history.append(
+                        types.Content(role=g_role, parts=[types.Part(text=content)])
+                    )
+                
+                chat_session = client.aio.chats.create(
+                    model=request.model,
+                    history=gemini_history,
+                    config=types.GenerateContentConfig(
+                        system_instruction=request.system_prompt,
+                        tools=[execute_command, open_application, get_weather, get_system_telemetry, control_system_volume]
+                    )
+                )
+                
+                last_msg = request.messages[-1]
+                last_content = last_msg.content if hasattr(last_msg, 'content') else last_msg.get('content')
+                
+                logger.info(f"Sending async streaming request to Gemini using model: {request.model}")
+                
+                async def gemini_event_generator():
+                    response_stream = await chat_session.send_message_stream(last_content)
+                    buffer = ""
+                    async for chunk in response_stream:
+                        if chunk.text:
+                            buffer += chunk.text
+                            while True:
+                                boundary_idx = -1
+                                for i in range(len(buffer)):
+                                    if buffer[i] in ['.', '!', '?', '\n']:
+                                        if i + 1 == len(buffer) or buffer[i+1].isspace():
+                                            boundary_idx = i
+                                            break
+                                if boundary_idx != -1:
+                                    sentence = buffer[:boundary_idx+1].strip()
+                                    buffer = buffer[boundary_idx+1:]
+                                    if sentence:
+                                        cleaned = clean_text_for_speech(sentence)
+                                        if cleaned:
+                                            yield cleaned + "\n"
+                                else:
+                                    break
+                    if buffer.strip():
+                        cleaned = clean_text_for_speech(buffer.strip())
+                        if cleaned:
+                            yield cleaned + "\n"
+                            
+                return StreamingResponse(gemini_event_generator(), media_type="text/plain")
+                
+            except Exception as e:
+                logger.error(f"Error in Gemini streaming chat: {e}")
+                async def err_gen():
+                    yield f"I encountered an error communicating with the Gemini servers: {str(e)}\n"
+                return StreamingResponse(err_gen(), media_type="text/plain")
+
+        # Handle Ollama models
+        formatted_messages = []
+        if request.system_prompt:
+            formatted_messages.append({"role": "system", "content": request.system_prompt})
+        
+        for msg in request.messages:
+            role = msg.role if hasattr(msg, 'role') else msg.get('role')
+            content = msg.content if hasattr(msg, 'content') else msg.get('content')
+            formatted_messages.append({"role": role, "content": content})
+
+        logger.info(f"Sending async streaming request to Ollama using model: {request.model}")
+        
+        import ollama
+        client = ollama.AsyncClient()
+        use_tools = True
+        
+        async def ollama_event_generator():
+            nonlocal formatted_messages, use_tools
+            for _ in range(3):
+                try:
+                    if use_tools:
+                        stream = await client.chat(
+                            model=request.model,
+                            messages=formatted_messages,
+                            tools=OLLAMA_TOOLS,
+                            stream=True
+                        )
+                    else:
+                        stream = await client.chat(
+                            model=request.model,
+                            messages=formatted_messages,
+                            stream=True
+                        )
+                    first_chunk = await anext(stream)
+                except StopAsyncIteration:
+                    break
+                except Exception as e:
+                    err_str = str(e)
+                    if use_tools and ("support tools" in err_str or "400" in err_str):
+                        logger.warning(f"Model {request.model} does not support tools. Retrying without tools.")
+                        use_tools = False
+                        continue
+                    else:
+                        raise e
+                
+                msg = first_chunk.message
+                if hasattr(msg, 'tool_calls') and msg.tool_calls:
+                    tool_calls = msg.tool_calls
+                    async for chunk in stream:
+                        if hasattr(chunk.message, 'tool_calls') and chunk.message.tool_calls:
+                            tool_calls.extend(chunk.message.tool_calls)
+                            
+                    logger.info(f"Jarvis is calling tools: {tool_calls}")
+                    
+                    assistant_msg = {
+                        "role": "assistant",
+                        "content": "",
+                        "tool_calls": [
+                            {
+                                "function": {
+                                    "name": tc.function.name,
+                                    "arguments": tc.function.arguments
+                                }
+                            } for tc in tool_calls
+                        ]
+                    }
+                    formatted_messages.append(assistant_msg)
+                    
+                    for tool in tool_calls:
+                        tool_name = tool.function.name
+                        tool_args = tool.function.arguments
+                        if tool_name in AVAILABLE_TOOLS:
+                            func = AVAILABLE_TOOLS[tool_name]
+                            try:
+                                result = func(**tool_args)
+                            except Exception as e:
+                                result = f"Error executing tool: {e}"
+                        else:
+                            result = f"Error: Tool '{tool_name}' not recognized."
+                            
+                        logger.info(f"Tool {tool_name} result: {result}")
+                        formatted_messages.append({
+                            "role": "tool",
+                            "content": result,
+                            "name": tool_name
+                        })
+                    continue
+                else:
+                    buffer = ""
+                    if hasattr(first_chunk.message, 'content') and first_chunk.message.content:
+                        buffer += first_chunk.message.content
+                        
+                    async for chunk in stream:
+                        if hasattr(chunk.message, 'content') and chunk.message.content:
+                            buffer += chunk.message.content
+                            while True:
+                                boundary_idx = -1
+                                for i in range(len(buffer)):
+                                    if buffer[i] in ['.', '!', '?', '\n']:
+                                        if i + 1 == len(buffer) or buffer[i+1].isspace():
+                                            boundary_idx = i
+                                            break
+                                if boundary_idx != -1:
+                                    sentence = buffer[:boundary_idx+1].strip()
+                                    buffer = buffer[boundary_idx+1:]
+                                    if sentence:
+                                        cleaned = clean_text_for_speech(sentence)
+                                        if cleaned:
+                                            yield cleaned + "\n"
+                                else:
+                                    break
+                    if buffer.strip():
+                        cleaned = clean_text_for_speech(buffer.strip())
+                        if cleaned:
+                            yield cleaned + "\n"
+                    break
+                    
+        return StreamingResponse(ollama_event_generator(), media_type="text/plain")
+        
+    except Exception as e:
+        logger.error(f"Error in streaming chat completion: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 @app.post("/api/chat")
 async def chat(request: ChatRequest):
@@ -249,7 +573,7 @@ async def chat(request: ChatRequest):
                     history=gemini_history,
                     config=types.GenerateContentConfig(
                         system_instruction=request.system_prompt,
-                        tools=[execute_command, open_application, get_weather]
+                        tools=[execute_command, open_application, get_weather, get_system_telemetry, control_system_volume]
                     )
                 )
                 

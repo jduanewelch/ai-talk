@@ -388,68 +388,59 @@ function stopListening() {
     }
 }
 
-// Send chat message to backend
-async function sendPrompt(text) {
-    setAppState('thinking');
+// Helper to initialize a streaming log message in the console
+function startStreamingLog(sender, type = 'ai') {
+    const now = new Date();
+    const pad = (num) => String(num).padStart(2, '0');
+    const timestampStr = `[${pad(now.getHours())}:${pad(now.getMinutes())}:${pad(now.getSeconds())}]`;
     
-    // Add user message to local history
-    chatHistory.push({ role: 'user', content: text });
+    const msgEl = document.createElement('div');
+    msgEl.className = `log-message ${type}`;
+    msgEl.innerHTML = `
+        <span class="timestamp">${timestampStr}</span>
+        <span class="sender">${sender}:</span>
+        <span class="content"></span>
+    `;
+    transcriptContainer.appendChild(msgEl);
+    transcriptContainer.scrollTop = transcriptContainer.scrollHeight;
     
-    // Keep history at a reasonable limit
-    if (chatHistory.length > 15) {
-        chatHistory = chatHistory.slice(-15);
-    }
+    const contentEl = msgEl.querySelector('.content');
     
-    try {
-        const res = await fetch('/api/chat', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-                model: modelSelect.value,
-                messages: chatHistory
-            })
-        });
-        
-        if (!res.ok) {
-            const err = await res.json();
-            throw new Error(err.detail || "Server error");
-        }
-        
-        const data = await res.json();
-        const aiResponse = data.response;
-        
-        addLog("JARVIS", aiResponse, "ai");
-        chatHistory.push({ role: 'assistant', content: aiResponse });
-        
-        if (voiceOutputToggle.checked) {
-            speakResponse(aiResponse);
-        } else {
-            setAppState('idle');
-            if (wakewordToggle.checked) {
-                startListening();
-            }
-        }
-        
-    } catch (e) {
-        console.error("Chat request failed:", e);
-        addLog("SYSTEM", `Communication breakdown: ${e.message}`, "system");
-        setAppState('idle');
-        if (wakewordToggle.checked) {
-            startListening();
-        }
-    }
+    return {
+        append: (text) => {
+            contentEl.textContent += text;
+            transcriptContainer.scrollTop = transcriptContainer.scrollHeight;
+        },
+        element: msgEl
+    };
 }
 
-// Synthesize and speak response
-function speakResponse(fullText) {
-    if (!fullText.trim()) {
-        setAppState('idle');
-        if (wakewordToggle && wakewordToggle.checked) {
-            startListening();
+// Add a sentence to the TTS playback queue
+function queueSentence(sentence) {
+    if (!sentence.trim()) return;
+    ttsQueue.push(sentence);
+    processTTSQueue();
+}
+
+// Process the next item in the queue
+function processTTSQueue() {
+    if (isPlayingQueue) return;
+    if (ttsQueue.length === 0) {
+        if (appState === 'speaking') {
+            setAppState('idle');
+            
+            // Restart listening in appropriate modes
+            if (continuousListeningToggle && continuousListeningToggle.checked) {
+                setTimeout(startListening, 400);
+            } else if (wakewordToggle && wakewordToggle.checked) {
+                setTimeout(startListening, 400);
+            }
         }
         return;
     }
     
+    const nextSentence = ttsQueue.shift();
+    isPlayingQueue = true;
     setAppState('speaking');
     
     // Stop recognition while Jarvis speaks to avoid self-triggering
@@ -463,7 +454,7 @@ function speakResponse(fullText) {
         const voice = voiceSelect.value;
         const speedVal = rateSlider ? parseInt(rateSlider.value) : 10;
         const rateParam = (speedVal >= 0 ? '+' : '') + speedVal + '%';
-        const audioUrl = `/api/tts?voice=${encodeURIComponent(voice)}&text=${encodeURIComponent(fullText)}&rate=${encodeURIComponent(rateParam)}`;
+        const audioUrl = `/api/tts?voice=${encodeURIComponent(voice)}&text=${encodeURIComponent(nextSentence)}&rate=${encodeURIComponent(rateParam)}`;
         
         ttsAudio.src = audioUrl;
         
@@ -473,15 +464,120 @@ function speakResponse(fullText) {
         
         ttsAudio.play().catch(e => {
             console.error("Audio playback failed:", e);
-            setAppState('idle');
-            if (wakewordToggle && wakewordToggle.checked) {
-                startListening();
-            }
+            isPlayingQueue = false;
+            processTTSQueue();
         });
     } catch (e) {
-        console.error("speakResponse failed:", e);
+        console.error("processTTSQueue play failed:", e);
+        isPlayingQueue = false;
+        processTTSQueue();
+    }
+}
+
+// Send chat message to backend and stream response
+async function sendPrompt(text) {
+    setAppState('thinking');
+    
+    // Add user message to local history
+    chatHistory.push({ role: 'user', content: text });
+    
+    // Keep history at a reasonable limit
+    if (chatHistory.length > 15) {
+        chatHistory = chatHistory.slice(-15);
+    }
+    
+    // Clear any previous TTS queue
+    ttsQueue = [];
+    isPlayingQueue = false;
+    
+    try {
+        const res = await fetch('/api/chat/stream', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                model: modelSelect.value,
+                messages: chatHistory
+            })
+        });
+        
+        if (!res.ok) {
+            const err = await res.json();
+            throw new Error(err.detail || "Server error");
+        }
+        
+        // Setup reader
+        const reader = res.body.getReader();
+        const decoder = new TextDecoder();
+        let buffer = '';
+        let fullResponse = '';
+        let streamLog = null;
+        
+        while (true) {
+            const { value, done } = await reader.read();
+            if (done) break;
+            
+            buffer += decoder.decode(value, { stream: true });
+            const lines = buffer.split('\n');
+            buffer = lines.pop(); // Keep partial line in buffer
+            
+            for (const line of lines) {
+                const sentence = line.trim();
+                if (sentence) {
+                    // Initialize the log element on the first sentence
+                    if (!streamLog) {
+                        streamLog = startStreamingLog("JARVIS", "ai");
+                    }
+                    
+                    // Add to log UI
+                    streamLog.append(sentence + " ");
+                    fullResponse += sentence + " ";
+                    
+                    // Add to speech queue
+                    if (voiceOutputToggle.checked) {
+                        queueSentence(sentence);
+                    }
+                }
+            }
+        }
+        
+        // Process final remaining sentence in buffer
+        if (buffer.trim()) {
+            const sentence = buffer.trim();
+            if (!streamLog) {
+                streamLog = startStreamingLog("JARVIS", "ai");
+            }
+            streamLog.append(sentence);
+            fullResponse += sentence;
+            
+            if (voiceOutputToggle.checked) {
+                queueSentence(sentence);
+            }
+        }
+        
+        // If voice output is not checked, or if there was no response text
+        if (!fullResponse.trim()) {
+            setAppState('idle');
+            if (wakewordToggle.checked) {
+                startListening();
+            }
+        } else {
+            // Append assistant response to history
+            chatHistory.push({ role: 'assistant', content: fullResponse.trim() });
+            
+            // If voice output is disabled, transition back to standby immediately
+            if (!voiceOutputToggle.checked) {
+                setAppState('idle');
+                if (wakewordToggle.checked) {
+                    startListening();
+                }
+            }
+        }
+        
+    } catch (e) {
+        console.error("Chat request failed:", e);
+        addLog("SYSTEM", `Communication breakdown: ${e.message}`, "system");
         setAppState('idle');
-        if (wakewordToggle && wakewordToggle.checked) {
+        if (wakewordToggle.checked) {
             startListening();
         }
     }
@@ -489,14 +585,8 @@ function speakResponse(fullText) {
 
 // Track end of audio playback
 ttsAudio.onended = () => {
-    setAppState('idle');
-    
-    // Restart listening in appropriate modes
-    if (continuousListeningToggle && continuousListeningToggle.checked) {
-        setTimeout(startListening, 400);
-    } else if (wakewordToggle && wakewordToggle.checked) {
-        setTimeout(startListening, 400);
-    }
+    isPlayingQueue = false;
+    processTTSQueue();
 };
 
 // Event Listeners for controls

@@ -229,33 +229,39 @@ async def run_jarvis_interaction(history, user_text, args):
     
     try:
         import httpx
-        # Send history to backend API (which handles tools!)
+        # Send history to backend API (which handles tools!) and stream sentences
         async with httpx.AsyncClient() as client:
-            res = await client.post(
-                "http://localhost:8000/api/chat",
+            async with client.stream(
+                "POST",
+                "http://localhost:8000/api/chat/stream",
                 json={
                     "model": args.model,
                     "messages": history,
                     "system_prompt": SYSTEM_PROMPT
                 },
                 timeout=30.0
-            )
-            
-            if res.status_code != 200:
-                raise Exception(f"Server returned status {res.status_code}: {res.text}")
+            ) as response:
+                if response.status_code != 200:
+                    raise Exception(f"Server returned status {response.status_code}")
                 
-            data = res.json()
-            ai_response = data["response"]
-        
-        print(f"\rJARVIS: {ai_response}\n")
-        
-        # Append Jarvis response to history
-        history.append({"role": "assistant", "content": ai_response})
-        save_history(history)
-        
-        # Speak response
-        if not args.mute:
-            await speak_text(ai_response, args.voice, args.rate)
+                print("\rJARVIS: ", end="", flush=True)
+                full_reply = ""
+                
+                # Iterate line by line (which correspond to individual sentences)
+                async for line in response.aiter_lines():
+                    sentence = line.strip()
+                    if sentence:
+                        print(sentence, end=" ", flush=True)
+                        full_reply += sentence + " "
+                        # Speak this sentence immediately (blocks until spoken)
+                        if not args.mute:
+                            await speak_text(sentence, args.voice, args.rate)
+                
+                print("\n")
+                
+                # Append Jarvis response to history
+                history.append({"role": "assistant", "content": full_reply.strip()})
+                save_history(history)
             
     except Exception as e:
         # Fallback to direct Ollama call if server is not running
