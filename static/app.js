@@ -625,7 +625,7 @@ async function sendPrompt(text) {
         // If voice output is not checked, or if there was no response text
         if (!fullResponse.trim()) {
             setAppState('idle');
-            if (wakewordToggle.checked) {
+            if (wakewordToggle.checked || (continuousListeningToggle && continuousListeningToggle.checked)) {
                 startListening();
             }
         } else {
@@ -635,7 +635,7 @@ async function sendPrompt(text) {
             // If voice output is disabled, transition back to standby immediately
             if (!voiceOutputToggle.checked) {
                 setAppState('idle');
-                if (wakewordToggle.checked) {
+                if (wakewordToggle.checked || (continuousListeningToggle && continuousListeningToggle.checked)) {
                     startListening();
                 }
             }
@@ -645,7 +645,7 @@ async function sendPrompt(text) {
         console.error("Chat request failed:", e);
         addLog("SYSTEM", `Communication breakdown: ${e.message}`, "system");
         setAppState('idle');
-        if (wakewordToggle.checked) {
+        if (wakewordToggle.checked || (continuousListeningToggle && continuousListeningToggle.checked)) {
             startListening();
         }
     }
@@ -696,9 +696,10 @@ wakewordToggle.addEventListener('change', () => {
 continuousListeningToggle.addEventListener('change', () => {
     if (continuousListeningToggle.checked) {
         wakewordToggle.checked = false;
-        // Stop current listener to switch continuous mode off/on
-        stopListening();
-        setAppState('idle');
+        // Start listener immediately when continuous mode is enabled
+        if (appState === 'idle') {
+            startListening();
+        }
     }
 });
 
