@@ -1,78 +1,69 @@
-<div align="center">
-  <h1>🤖 J.A.R.V.I.S. Local AI</h1>
-  <p><i>A completely offline, voice-activated AI assistant running locally via Ollama.</i></p>
-</div>
+# 🤖 RME SENTINEL — Amazon MCC1 Technician AI Sidekick
+
+> **Intelligent Multimodal Tablet Sidekick for Amazon Reliability, Maintenance, and Engineering (RME) Service Technicians at MCC1 (Rancho Cordova Cross-Dock).**
 
 ---
 
 ## ⚡ Overview
-J.A.R.V.I.S. is a futuristic, highly responsive voice assistant that runs entirely locally on your machine. By leveraging an unfiltered LLM (`dolphin-llama3` via Ollama) and natural voice synthesis, it ensures 100% privacy with zero cloud dependencies. It features dynamic tool-calling, real-time system telemetry streaming, and a high-tech sci-fi visual interface.
+**RME Sentinel** is a purpose-built, safety-first AI copilot designed for Amazon RME Technicians (Tech II, Tech III, Control Systems Leads, and Robotics Specialists) working in high-throughput fulfillment and cross-dock environments.
 
-## 🚀 Features
-- **100% Offline & Private:** Powered by local Ollama instances.
-- **Voice Activation:** "Jarvis" wake-word detection using Web Speech API.
-- **Dual Interfaces:** Use the stunning sci-fi Web HUD or run it silently as a terminal daemon.
-- **Cross-Platform Support:** Installers and guides for Windows, Linux, Android, and iOS.
+### 🌟 Key Capabilities
+* **📸 Multimodal Vision & Camera Inspection:** Snap photos of PowerFlex 525 VFD faults, Banner Q4X photoeye alignment LEDs, broken sorter shoes, or loose drive chains. The AI analyzes the image, places HUD visual marker boxes around the fault, and generates step-by-step troubleshooting.
+* **🛡️ Strict Safety & LOTO Gatekeeping:** Prominent, non-blocking contextual Red/Amber safety cards for Lockout/Tagout (LOTO), Arc Flash NFPA 70E PPE categories, zero-energy multi-meter try-step verification, pneumatic air dumps, and hydraulic safety prop bars.
+* **🎧 Bluetooth Headset Voice HUD:** Hands-free two-way audio dictation (Speech-to-Text) and crisp step-by-step audio narration (Text-to-Speech) so technicians can work with tools while listening to the AI.
+* **📋 Shift Passdown & Work Order Logger:** Log work orders, parts used, downtime, and generate executive shift handoff summaries ready to paste into Slack, Chime, or email.
+* **🔍 Nameplate & Sensor OCR Scanner:** Extract Full Load Amps (FLA), voltage, horsepower, RPM, gear ratios, and wiring pinouts from motor nameplates and sensor labels.
+* **🧮 RME Field Calculators:** Built-in calculators for V-Belt Sonic Tension Frequency (Hz), 3-Phase Motor FLA & Wire Sizing, Fastener Torque Specs, and Hydraulic Cylinder Lift Force (PSI ↔ Tonnage).
+* **📱 Tablet PWA Mode:** Glove-friendly touch targets (52px+ buttons, oversized checkboxes), high-contrast tactical dark theme, and offline-resilient local queuing.
 
 ---
 
-## 💻 Desktop Installation (Windows & Linux)
+## 🌐 Dual Hosting Modes
 
-J.A.R.V.I.S. requires a backend server to process AI models and a frontend interface to display the HUD. 
-
-### Prerequisites
-1. **[Install Ollama](https://ollama.com/)** on your system.
-2. Pull the AI model: `ollama run dolphin-llama3` (or any model you prefer).
-3. **[Install Python 3.10+](https://www.python.org/downloads/)**.
-
-### Method 1: Running from Source
-1. Clone the repository: `git clone https://github.com/jduanewelch/ai-talk.git`
-2. Install dependencies: `pip install -r requirements.txt`
-3. Run the server: `python server.py`
-4. Open `http://localhost:8000` in your Chrome/Edge browser.
-
-### Method 2: Creating a Standalone Executable
-You can package J.A.R.V.I.S. into a single, clickable desktop application using PyInstaller.
-1. Install PyInstaller: `pip install pyinstaller`
-2. Compile the app: 
-   ```bash
-   pyinstaller --name "JarvisUI" --windowed --add-data "static:static" --add-data "templates:templates" server.py
+### Mode 1: 100% Serverless on GitHub Pages (Zero Server Needed!)
+Because RME Sentinel includes direct client-side Google Gemini REST API support, you can host the entire app completely free on **GitHub Pages**:
+1. Push this repository to GitHub.
+2. Go to **Repository Settings** ➔ **Pages**.
+3. Under **Build and deployment** ➔ **Branch**, select `main` and folder `/ (root)` or `/docs`.
+4. Click **Save**.
+5. Your live app URL will be:
    ```
-3. Your standalone application will be generated inside the `dist/` folder! You can now move this `.exe` (Windows) or binary (Linux) anywhere on your system.
+   https://<your-username>.github.io/ai-talk/
+   ```
+6. Open that URL in Chrome on your Android tablet, tap the three dots ➔ **"Add to Home Screen"** to install it as a standalone full-screen tablet app!
+7. Enter your Gemini API key in **Settings** (it saves securely in your tablet's local storage).
 
 ---
 
-## 📱 Mobile Installation (Android & iPhone)
+### Mode 2: Local / Site Network Server (Python FastAPI)
+Run the backend server on your PC or local warehouse network:
 
-Because running massive language models requires dedicated PC hardware (RAM and GPU), smartphones cannot natively run the local Ollama engine. 
+```bash
+# 1. Install dependencies
+pip install -r requirements.txt
 
-Instead, J.A.R.V.I.S. uses a **Server-Client Architecture** for mobile. Your PC runs the heavy lifting, and your phone acts as the remote microphone and speaker.
+# 2. Configure .env with your Gemini API Key
+echo "GEMINI_API_KEY=your_key_here" > .env
 
-### Step 1: Configure Your Desktop Server
-1. Ensure your PC (running the J.A.R.V.I.S. `server.py`) and your smartphone are connected to the **same WiFi network**.
-2. Find your PC's local IP address:
-   - **Windows:** Open Command Prompt and type `ipconfig` (Look for IPv4 Address, e.g., `192.168.1.50`).
-   - **Linux:** Open Terminal and type `ip a` or `ifconfig`.
-3. Start the server on your PC. *(Note: Ensure `uvicorn` is bound to `0.0.0.0` instead of `localhost` so external devices can connect).*
+# 3. Start the FastAPI server
+python server.py
+```
 
-### Step 2: Connect Your Phone (iOS & Android)
-1. Open **Safari (iPhone)** or **Chrome (Android)** on your phone.
-2. Navigate to your PC's IP address and port (e.g., `http://192.168.1.50:8000`).
-3. You will see the J.A.R.V.I.S. HUD load perfectly on your mobile screen.
-4. **Make it an App:**
-   - **iPhone:** Tap the "Share" icon at the bottom of Safari and select **"Add to Home Screen"**.
-   - **Android:** Tap the three-dot menu in Chrome and select **"Add to Home Screen"**.
-5. You now have a standalone J.A.R.V.I.S. app icon on your phone! Tap it to launch the interface natively, toggle the wake-word, and speak to your PC from anywhere in the house.
+* **Local Machine:** Open `http://localhost:8000` in your browser.
+* **Android Tablet on same Wi-Fi:** Open `http://<your-pc-ip>:8000` on your tablet.
 
 ---
 
-## ⌨️ Advanced: Linux Global Shortcuts
-Want to trigger J.A.R.V.I.S. instantly without the browser? You can run it silently in the background:
-1. Open your Desktop Environment Settings (GNOME/KDE).
-2. Navigate to **Custom Shortcuts** -> Add New.
-3. **Command:** `/path/to/your/venv/bin/python /path/to/jarvis_voice.py`
-4. Bind it to a key combination like `Super + J`.
-5. Press the shortcut, wait for the chime, and speak!
+## 🏭 Amazon MCC1 Equipment Profiles Covered
+* **Inbound & Docks:** Caljan extendable boom conveyors, Rite-Hite hydraulic dock levelers, Dok-Lok vehicle restraints.
+* **Sortation & Conveyors:** Dematic & Vanderlande sliding shoe sorters, Intralox ARB switches, Interroll / Itoh Denki MDR ZPA accumulation, AmbaFlex spiral conveyors.
+* **Controls & Electrical:** Allen-Bradley ControlLogix / Studio 5000, PowerFlex 525 & 755 VFDs, SEW Eurodrive Movimot, Banner Q4X/QS18 photoeyes, Sick laser scanners, 480VAC/120VAC/24VDC circuits.
+* **Mezzanine & Bulk:** VRCs (Vertical Reciprocating Conveyor lifts), stretch wrappers, balers.
 
 ---
-*Developed by Jonathan Welch*
+
+## 📱 PWA Tablet Installation
+1. Open the app URL on Chrome on your Android Tablet.
+2. Tap the three dots menu in the upper right.
+3. Tap **"Add to Home Screen"** or **"Install App"**.
+4. Launch "RME Sentinel" directly from your home screen in full-screen industrial mode!

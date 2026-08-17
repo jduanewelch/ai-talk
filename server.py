@@ -1,25 +1,35 @@
 import os
+import json
 import logging
+import base64
+import re
+from datetime import datetime
+from typing import List, Dict, Optional, Any
 from dotenv import load_dotenv
-from fastapi import FastAPI, HTTPException, Query
-from fastapi.responses import FileResponse, StreamingResponse
+
+from fastapi import FastAPI, HTTPException, Query, Body
+from fastapi.responses import FileResponse, StreamingResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel
+
+import edge_tts
+from google import genai
+from google.genai import types
 
 # Load environment variables
 load_dotenv()
-import ollama
-import edge_tts
-from pydantic import BaseModel
-from typing import List, Dict
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger("jarvis-backend")
+logger = logging.getLogger("rme-sentinel")
 
-app = FastAPI(title="Jarvis AI Voice Assistant")
+app = FastAPI(
+    title="Amazon RME Technician AI Copilot",
+    description="Intelligent Multimodal Tablet Sidekick for Amazon RME Service Technicians at MCC1",
+    version="2.0.0"
+)
 
-# Enable CORS for development
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -28,587 +38,394 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Ensure static directory exists
 os.makedirs("static", exist_ok=True)
+os.makedirs("data", exist_ok=True)
 
-class ChatMessage(BaseModel):
-    role: str
-    content: str
+PASSDOWN_LOG_FILE = "data/passdown_logs.json"
 
-class ChatRequest(BaseModel):
-    model: str = "dolphin-llama3"
-    messages: List[ChatMessage]
-    system_prompt: str = (
-        "You are Jarvis, a highly intelligent, sophisticated, and helpful AI assistant. "
-        "You speak in a polite, natural, and witty manner, similar to Tony Stark's Jarvis. "
-        "Keep your responses concise, conversational, and direct, suitable for speech. "
-        "Do NOT use emojis, bullet points, markdown tables, asterisks, or code formatting in your responses under any circumstances. "
-        "Always write pure conversational text that can be spoken directly by a human."
-    )
+def get_gemini_client():
+    api_key = os.getenv("GEMINI_API_KEY")
+    if not api_key:
+        raise HTTPException(status_code=500, detail="GEMINI_API_KEY is not configured in .env or settings.")
+    return genai.Client(api_key=api_key)
+
+# ----------------- PROMPTS & DOMAIN KNOWLEDGE -----------------
+
+RME_SYSTEM_PROMPT = """
+You are "RME Sentinel", an expert AI Senior Reliability, Maintenance, and Engineering (RME) Specialist and Control Systems Lead (CSL) acting as an on-the-floor tablet sidekick for an Amazon Service Technician at Amazon MCC1 (Rancho Cordova, CA - Inbound Cross-Dock / IXD facility).
+
+FACILITY CONTEXT:
+- Amazon MCC1 is an Inbound Cross-Dock facility (629k sq ft, 132 dock doors, high-speed automated sorting, mezzanine decks, big-rig intake).
+- Key Equipment Domains:
+  1. Inbound & Dock: Caljan / FMH telescoping extendable boom conveyors, Rite-Hite hydraulic dock levelers, Dok-Lok vehicle restraints, dock seals, truck restraint interlocks.
+  2. Sortation & Merge: High-speed sliding shoe sorters (Dematic, Vanderlande, Intelligrated), Intralox ARB (Activated Roller Belt) aligners and switches, Sawtooth merges, MDR (Motorized Drive Rollers - Interroll EC310/EC5000, Itoh Denki PM605FE) zero-pressure accumulation (ZPA) zones, AmbaFlex spiral conveyors, incline/decline flat belts.
+  3. Controls & Electrical: Allen-Bradley ControlLogix / CompactLogix (Studio 5000), PowerFlex 525 & 755 VFDs (F004 UnderVolt, F005 OverVolt, F007 Motor Overload, F012 HW OverCurrent, F013 Ground Fault, F070 Power Unit, F081 Comm Loss), SEW Eurodrive / Movimot gearmotors, Banner Q4X distance laser sensors, QS18 photoeyes, Sick laser scanners, Point I/O, 480VAC 3-phase, 120VAC, 24VDC control circuits.
+  4. Mezzanine & Bulk: VRCs (Vertical Reciprocating Conveyors - Pflow/Wildeck), stretch wrappers, balers, air compressors.
+
+SAFETY & PROTOCOL MANDATES:
+- Always prioritize Technician Safety (OSHA 1910.147, NFPA 70E Arc Flash, Class 0/00 1000V rated gloves, 3-point contact, Fall Protection harness, Lockout/Tagout - LOTO).
+- Always include explicit Zero-Energy verification steps (meter try-step: test live circuit, test zero on isolated circuit, test live circuit again).
+- Always flag Stored Energy Hazards (pneumatic air bleeder valves, mechanical safety prop bars for dock levelers, gravity-loaded VRC carriages, counterweights).
+
+OUTPUT FORMAT:
+You MUST respond with valid JSON matching the following structure so the tablet UI can render interactive step-by-step checklist cards and visual overlays:
+{
+  "problem_title": "Short descriptive title of the issue",
+  "severity": "CRITICAL" | "HIGH" | "MEDIUM" | "LOW",
+  "subsystem": "Conveyor | VFD/Controls | Sorter | Dock/Boom | Sensor | Hydraulic/Pneumatic",
+  "equipment_identified": "Identified machine/component name and model",
+  "summary": "Clear, concise technical summary of what was detected and the root cause hypothesis.",
+  "safety_warnings": [
+    {
+      "level": "DANGER" | "WARNING" | "CAUTION",
+      "type": "LOTO | ARC_FLASH | PINCH_POINT | STORED_ENERGY | WORKING_AT_HEIGHTS",
+      "message": "Specific safety action (e.g. Disconnect Main 480V Breaker at Panel DP-3, perform Try-Step with Cat III 600V meter, apply Safety Prop bar before working under leveler lip)."
+    }
+  ],
+  "required_ppe": ["Arc Flash Shield", "Class 00 Insulated Gloves", "Kevlar Cut-5 Gloves", "Safety Glasses", "Steel Toe Boots"],
+  "required_tools": ["Calibrated Fluke Multimeter", "Metric Allen Hex Set", "Torque Wrench (25-50 ft-lbs)", "Jam Pole", "Wire Stripper/Ferrule Crimper"],
+  "visual_markers": [
+    {
+      "label": "Fault / Component tag",
+      "description": "What to look at in the image (e.g. PowerFlex Display showing F004, Photoeye LED amber flashing, worn V-belt teeth)",
+      "box_2d": [ymin, xmin, ymax, xmax] // normalized coordinates 0-1000 if image provided, or null
+    }
+  ],
+  "steps": [
+    {
+      "step_number": 1,
+      "title": "Short step header",
+      "instruction": "Detailed, practical step-by-step instructions written for an RME technician.",
+      "safety_note": "Optional specific hazard warning for this single step or null",
+      "specs": "Optional electrical or mechanical spec (e.g. 'Target: 480VAC +/- 5%, Torque: 35 ft-lbs, Air: 90 PSI') or null",
+      "pro_tip": "Amazon RME best practice tip for longevity or quick diagnosis"
+    }
+  ],
+  "quick_verification": "Final test procedure to confirm the fix before releasing equipment back to Operations.",
+  "spoken_summary": "A natural, crisp 2-to-3 sentence audio script designed to be read aloud via Bluetooth headphones to the technician."
+}
+"""
+
+OCR_PROMPT = """
+You are an expert Optical Character Recognition (OCR) and technical specification extractor for industrial warehouse equipment at Amazon MCC1.
+Analyze the provided image of an industrial nameplate, sensor label, motor tag, VFD label, or electrical component.
+
+Return a valid JSON object with the following fields:
+{
+  "manufacturer": "e.g. SEW-Eurodrive / Allen-Bradley / Banner / Baldor / Siemens",
+  "model_number": "Exact model or part number",
+  "serial_number": "Serial number if visible",
+  "equipment_type": "3-Phase Induction Motor | VFD Inverter | Photoeye Sensor | Gearbox | Breaker",
+  "electrical_specs": {
+    "voltage": "e.g. 230/460 VAC",
+    "full_load_amps_fla": "e.g. 4.8 / 2.4 A",
+    "frequency_hz": "60 Hz",
+    "phase": "3 Phase",
+    "horsepower_hp": "e.g. 2.0 HP",
+    "rpm": "e.g. 1750 RPM"
+  },
+  "mechanical_specs": {
+    "gear_ratio": "e.g. 15.4:1",
+    "frame_size": "e.g. 56C",
+    "torque_rating": "e.g. 120 Nm",
+    "shaft_diameter": "e.g. 1-1/8 in"
+  },
+  "sensor_specs": {
+    "sensing_range": "e.g. 0-300 mm",
+    "output_type": "PNP / NPN / IO-Link",
+    "supply_voltage": "10-30 VDC",
+    "pinout": "Pin 1: Brown (+24V), Pin 2: White (NC), Pin 3: Blue (0V), Pin 4: Black (NO)"
+  },
+  "replacement_notes": "Key compatibility requirements or Amazon stock equivalent recommendations."
+}
+"""
+
+PASSDOWN_PROMPT = """
+You are an Amazon RME Area Maintenance Manager / Lead synthesizing a shift handoff report for Amazon MCC1 (Rancho Cordova Cross-Dock).
+Given the following list of maintenance logs, repairs, and inspections completed during this shift, generate a professional, high-impact Shift Passdown formatted in Markdown.
+
+Include:
+1. Executive Summary & Site Health (Line uptime, major breakdowns, SEV escalations)
+2. Completed Work Orders & Corrective Actions
+3. Open / Pending Follow-ups for the Oncoming Shift
+4. Parts Used & Re-order Alerts
+5. 5S & Safety Status
+"""
+
+# ----------------- MODELS -----------------
+
+class DiagnoseRequest(BaseModel):
+    description: str
+    category: Optional[str] = "General"
+    image_base64: Optional[str] = None
+    media_type: Optional[str] = "image/jpeg"
+    audio_transcript: Optional[str] = None
+    line_id: Optional[str] = "MCC1-General"
+
+class OCRRequest(BaseModel):
+    image_base64: str
+    media_type: Optional[str] = "image/jpeg"
+
+class PassdownEntry(BaseModel):
+    id: Optional[str] = None
+    timestamp: Optional[str] = None
+    technician: str
+    asset_id: str
+    equipment_type: str
+    problem: str
+    action_taken: str
+    parts_used: Optional[str] = "None"
+    downtime_minutes: int = 0
+    status: str = "COMPLETED" # COMPLETED, PENDING_PARTS, FOLLOW_UP_REQUIRED
+    severity: str = "MEDIUM"
+
+class PassdownGenerateRequest(BaseModel):
+    shift_name: str = "Front-Half Days (FHD)"
+    entries: Optional[List[PassdownEntry]] = None
+
+# ----------------- HELPERS -----------------
+
+def clean_json_response(raw_text: str) -> Dict[str, Any]:
+    """Extract and parse JSON from LLM response."""
+    text = raw_text.strip()
+    if text.startswith("```json"):
+        text = text[7:]
+    elif text.startswith("```"):
+        text = text[3:]
+    if text.endswith("```"):
+        text = text[:-3]
+    text = text.strip()
+    return json.loads(text)
+
+def load_passdown_entries() -> List[Dict[str, Any]]:
+    if not os.path.exists(PASSDOWN_LOG_FILE):
+        return []
+    try:
+        with open(PASSDOWN_LOG_FILE, "r") as f:
+            return json.load(f)
+    except Exception as e:
+        logger.error(f"Error loading passdowns: {e}")
+        return []
+
+def save_passdown_entries(entries: List[Dict[str, Any]]):
+    try:
+        with open(PASSDOWN_LOG_FILE, "w") as f:
+            json.dump(entries, f, indent=2)
+    except Exception as e:
+        logger.error(f"Error saving passdowns: {e}")
+
+# ----------------- API ENDPOINTS -----------------
 
 @app.get("/")
-async def read_index():
+async def get_index():
     return FileResponse("static/index.html")
 
-@app.get("/api/models")
-async def list_models():
+@app.post("/api/diagnose")
+async def diagnose_equipment(req: DiagnoseRequest):
+    """
+    Multimodal troubleshooting engine for Amazon RME IXD technicians.
+    Processes images, text description, and equipment context via Gemini 2.5 Flash.
+    """
     try:
-        models_response = ollama.list()
-        models = [model.model for model in models_response.models]
-    except Exception as e:
-        logger.error(f"Error fetching Ollama models: {e}")
-        # Fallback to a hardcoded list if Ollama is temporarily unreachable
-        models = ["dolphin-llama3", "gemma2", "smallthinker"]
-    
-    return {"models": models}
+        client = get_gemini_client()
+        contents = []
 
-@app.get("/api/voices")
-async def list_voices():
-    # Return a curated list of natural-sounding English voices
-    curated_voices = [
-        {"id": "en-GB-RyanNeural", "name": "Ryan (Male, British) - Jarvis Style", "gender": "Male", "locale": "en-GB"},
-        {"id": "en-GB-SoniaNeural", "name": "Sonia (Female, British)", "gender": "Female", "locale": "en-GB"},
-        {"id": "en-US-GuyNeural", "name": "Guy (Male, American)", "gender": "Male", "locale": "en-US"},
-        {"id": "en-US-AriaNeural", "name": "Aria (Female, American)", "gender": "Female", "locale": "en-US"},
-        {"id": "en-AU-WilliamNeural", "name": "William (Male, Australian)", "gender": "Male", "locale": "en-AU"},
-        {"id": "en-US-JennyNeural", "name": "Jenny (Female, American)", "gender": "Female", "locale": "en-US"}
-    ]
-    return {"voices": curated_voices}
+        # If an image is provided
+        if req.image_base64:
+            # Handle data URL prefix if present
+            img_b64 = req.image_base64
+            if "," in img_b64:
+                img_b64 = img_b64.split(",", 1)[1]
+            img_bytes = base64.b64decode(img_b64)
+            contents.append(types.Part.from_bytes(data=img_bytes, mime_type=req.media_type or "image/jpeg"))
 
-def clean_text_for_speech(text: str) -> str:
-    import re
-    # Remove markdown formatting (bold, italic, headers, backticks, asterisks)
-    text = re.sub(r'\*\*|__|\*|_|`|#', '', text)
-    # Remove emojis using unicode range regex
-    emoji_pattern = re.compile(
-        '['
-        '\U0001f300-\U0001f5ff'
-        '\U0001f600-\U0001f64f'
-        '\U0001f680-\U0001f6ff'
-        '\u2600-\u26ff'
-        '\u2700-\u27bf'
-        '\U0001f1e6-\U0001f1ff'
-        '\U0001f900-\U0001f9ff'
-        '\U0001fa70-\U0001faff'
-        ']+', flags=re.UNICODE
-    )
-    text = emoji_pattern.sub('', text)
-    # Clean up double/multiple spaces
-    text = re.sub(r'\s+', ' ', text).strip()
-    return text
+        user_query = f"""
+EQUIPMENT DIAGNOSTIC REQUEST:
+- Facility: Amazon MCC1 (Rancho Cordova Cross-Dock)
+- Line / Asset Location: {req.line_id}
+- Equipment Category: {req.category}
+- Technician's Description: {req.description}
+"""
+        if req.audio_transcript:
+            user_query += f"\n- Voice Notes: {req.audio_transcript}"
 
-# Helper tool functions for Jarvis
-ACTIVE_TOOL_CALLS = []
+        contents.append(user_query)
 
-def execute_command(command: str) -> str:
-    ACTIVE_TOOL_CALLS.append({"name": "execute_command", "params": f"command='{command}'"})
-    import subprocess
-    safe_bases = ['df', 'free', 'uptime', 'uname', 'acpi', 'date', 'ping', 'hostname', 'whoami', 'ls', 'cat', 'grep']
-    parts = command.strip().split()
-    if not parts:
-        return "Error: Empty command."
-    base = parts[0]
-    
-    if base not in safe_bases:
-        return f"Error: Command '{base}' is not in the allowed list of safe commands for security reasons."
-        
-    try:
-        res = subprocess.run(command, shell=True, capture_output=True, text=True, timeout=5.0)
-        return f"STDOUT:\n{res.stdout}\nSTDERR:\n{res.stderr}"
-    except subprocess.TimeoutExpired:
-        return "Error: Command timed out."
-    except Exception as e:
-        return f"Error: {e}"
+        logger.info(f"Submitting diagnostic request for {req.category} at {req.line_id}")
 
-def open_application(app_name: str) -> str:
-    ACTIVE_TOOL_CALLS.append({"name": "open_application", "params": f"app_name='{app_name}'"})
-    import subprocess
-    import shlex
-    cleaned = shlex.split(app_name)[0]
-    allowed_apps = ['firefox', 'chrome', 'chromium', 'vlc', 'calculator', 'gnome-calculator', 'gnome-terminal', 'libreoffice', 'gimp', 'nautilus', 'spotify']
-    
-    if cleaned not in allowed_apps:
-        return f"Error: Application '{cleaned}' is not in the allowed list."
-        
-    try:
-        subprocess.Popen([cleaned], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
-        return f"Successfully launched {cleaned} in the background."
-    except Exception as e:
-        return f"Error launching {cleaned}: {e}"
-
-def get_weather(city: str) -> str:
-    ACTIVE_TOOL_CALLS.append({"name": "get_weather", "params": f"city='{city}'"})
-    import urllib.request
-    import urllib.parse
-    try:
-        url = f"https://wttr.in/{urllib.parse.quote(city)}?format=3"
-        req = urllib.request.Request(url, headers={'User-Agent': 'curl/7.81.0'})
-        with urllib.request.urlopen(req, timeout=5.0) as response:
-            return response.read().decode('utf-8').strip()
-    except Exception as e:
-        return f"Error fetching weather: {e}"
-
-def get_system_telemetry() -> str:
-    ACTIVE_TOOL_CALLS.append({"name": "get_system_telemetry", "params": ""})
-    import psutil
-    try:
-        # CPU Info
-        cpu_percent = psutil.cpu_percent(interval=0.1)
-        cpu_cores = psutil.cpu_count(logical=True)
-        
-        # Memory Info
-        mem = psutil.virtual_memory()
-        mem_total_gb = round(mem.total / (1024**3), 2)
-        mem_used_gb = round(mem.used / (1024**3), 2)
-        mem_percent = mem.percent
-        
-        # Disk Info
-        disk = psutil.disk_usage('/')
-        disk_total_gb = round(disk.total / (1024**3), 2)
-        disk_used_gb = round(disk.used / (1024**3), 2)
-        disk_percent = disk.percent
-        
-        # Battery Info
-        battery_str = "N/A"
-        try:
-            battery = psutil.sensors_battery()
-            if battery:
-                battery_str = f"{battery.percent}% ({'Charging' if battery.power_plugged else 'Discharging'}, {round(battery.secsleft / 60) if battery.secsleft != -1 and battery.secsleft != -2 else 'calculating'} mins remaining)"
-        except Exception:
-            pass
-            
-        # CPU Temperature Info
-        temp_str = "N/A"
-        try:
-            temps = psutil.sensors_temperatures()
-            if temps:
-                for key in ['coretemp', 'cpu-thermal', 'k10temp', 'acpitz']:
-                    if key in temps:
-                        temp_str = f"{temps[key][0].current}°C"
-                        break
-                if temp_str == "N/A":
-                    first_key = list(temps.keys())[0]
-                    temp_str = f"{temps[first_key][0].current}°C"
-        except Exception:
-            pass
-            
-        telemetry = (
-            f"SYSTEM TELEMETRY DIAGNOSTICS:\n"
-            f"- CPU Usage: {cpu_percent}% (Cores: {cpu_cores})\n"
-            f"- CPU Temp: {temp_str}\n"
-            f"- RAM Usage: {mem_percent}% ({mem_used_gb}GB / {mem_total_gb}GB)\n"
-            f"- Disk Space: {disk_percent}% ({disk_used_gb}GB used / {disk_total_gb}GB total)\n"
-            f"- Battery: {battery_str}"
+        response = client.models.generate_content(
+            model="gemini-2.5-flash",
+            contents=contents,
+            config=types.GenerateContentConfig(
+                system_instruction=RME_SYSTEM_PROMPT,
+                response_mime_type="application/json",
+                temperature=0.2
+            )
         )
-        return telemetry
-    except Exception as e:
-        return f"Error gathering telemetry: {e}"
 
-def control_system_volume(action: str, value: int = None) -> str:
-    ACTIVE_TOOL_CALLS.append({"name": "control_system_volume", "params": f"action='{action}', value={value}"})
-    import subprocess
-    action = action.lower().strip()
-    allowed_actions = ["up", "down", "mute", "unmute", "set", "status"]
-    if action not in allowed_actions:
-        return f"Error: Action '{action}' is invalid. Allowed: up, down, mute, unmute, set, status."
-        
+        result = clean_json_response(response.text)
+        return JSONResponse(content=result)
+
+    except Exception as e:
+        logger.error(f"Error in /api/diagnose: {e}")
+        # Return a structured fallback if API fails
+        return JSONResponse(
+            status_code=500,
+            content={
+                "error": str(e),
+                "message": "Failed to complete AI diagnostic. Please check your Gemini API key and network connection."
+            }
+        )
+
+@app.post("/api/ocr-nameplate")
+async def ocr_nameplate(req: OCRRequest):
+    """
+    Extracts electrical, mechanical, and wiring specifications from motor nameplates and sensors.
+    """
     try:
-        if action == "mute":
-            subprocess.run("amixer set Master mute", shell=True, capture_output=True, text=True)
-            return "System muted successfully."
-        elif action == "unmute":
-            subprocess.run("amixer set Master unmute", shell=True, capture_output=True, text=True)
-            return "System unmuted successfully."
-        elif action == "status":
-            res = subprocess.run("amixer get Master", shell=True, capture_output=True, text=True)
-            return f"Volume Status:\n{res.stdout}"
-        elif action == "up":
-            amount = value if value is not None else 5
-            subprocess.run(f"amixer set Master {amount}%+", shell=True, capture_output=True, text=True)
-            return f"System volume increased by {amount}%."
-        elif action == "down":
-            amount = value if value is not None else 5
-            subprocess.run(f"amixer set Master {amount}%-", shell=True, capture_output=True, text=True)
-            return f"System volume decreased by {amount}%."
-        elif action == "set":
-            if value is None or not (0 <= value <= 100):
-                return "Error: A valid volume percentage between 0 and 100 must be specified for the 'set' action."
-            subprocess.run(f"amixer set Master {value}%", shell=True, capture_output=True, text=True)
-            return f"System volume set to {value}%."
+        client = get_gemini_client()
+        img_b64 = req.image_base64
+        if "," in img_b64:
+            img_b64 = img_b64.split(",", 1)[1]
+        img_bytes = base64.b64decode(img_b64)
+
+        contents = [
+            types.Part.from_bytes(data=img_bytes, mime_type=req.media_type or "image/jpeg"),
+            "Read all visible markings, ratings, model numbers, and technical specifications from this equipment nameplate."
+        ]
+
+        response = client.models.generate_content(
+            model="gemini-2.5-flash",
+            contents=contents,
+            config=types.GenerateContentConfig(
+                system_instruction=OCR_PROMPT,
+                response_mime_type="application/json",
+                temperature=0.1
+            )
+        )
+
+        result = clean_json_response(response.text)
+        return JSONResponse(content=result)
+
     except Exception as e:
-        return f"Error controlling volume: {e}"
+        logger.error(f"Error in /api/ocr-nameplate: {e}")
+        return JSONResponse(status_code=500, content={"error": str(e)})
 
-AVAILABLE_TOOLS = {
-    'execute_command': execute_command,
-    'open_application': open_application,
-    'get_weather': get_weather,
-    'get_system_telemetry': get_system_telemetry,
-    'control_system_volume': control_system_volume
-}
+@app.get("/api/passdown")
+async def get_passdown():
+    entries = load_passdown_entries()
+    return {"entries": entries}
 
-OLLAMA_TOOLS = [
-    {
-        'type': 'function',
-        'function': {
-            'name': 'execute_command',
-            'description': 'Execute a shell command on the local Linux system. Allowed commands: df, free, uptime, uname, acpi, date, ping, hostname, whoami, ls, cat, grep.',
-            'parameters': {
-                'type': 'object',
-                'properties': {
-                    'command': {
-                        'type': 'string',
-                        'description': 'The exact bash command to execute (e.g. "free -h", "df -h", "uptime").',
-                    },
-                },
-                'required': ['command'],
-            },
-        },
-    },
-    {
-        'type': 'function',
-        'function': {
-            'name': 'open_application',
-            'description': 'Launch a GUI desktop application on the local Linux system. Allowed applications: firefox, chrome, chromium, vlc, calculator, gnome-calculator, gnome-terminal, libreoffice, gimp, nautilus, spotify.',
-            'parameters': {
-                'type': 'object',
-                'properties': {
-                    'app_name': {
-                        'type': 'string',
-                        'description': 'The exact application executable name (e.g. "firefox", "calculator").',
-                    },
-                },
-                'required': ['app_name'],
-            },
-        },
-    },
-    {
-        'type': 'function',
-        'function': {
-            'name': 'get_weather',
-            'description': 'Get the current weather conditions for a given city.',
-            'parameters': {
-                'type': 'object',
-                'properties': {
-                    'city': {
-                        'type': 'string',
-                        'description': 'The name of the city (e.g. "London", "Paris").',
-                    },
-                },
-                'required': ['city'],
-            },
-        },
-    },
-    {
-        'type': 'function',
-        'function': {
-            'name': 'get_system_telemetry',
-            'description': 'Retrieve system telemetry diagnostics (CPU usage, CPU temperature, RAM usage, Disk space, and battery status).',
-            'parameters': {
-                'type': 'object',
-                'properties': {},
-            },
-        },
-    },
-    {
-        'type': 'function',
-        'function': {
-            'name': 'control_system_volume',
-            'description': 'Control the host system audio volume and mute state.',
-            'parameters': {
-                'type': 'object',
-                'properties': {
-                    'action': {
-                        'type': 'string',
-                        'description': 'The volume control action to perform. Allowed values: status, up, down, set, mute, unmute.',
-                    },
-                    'value': {
-                        'type': 'integer',
-                        'description': 'Optional integer volume percentage (0 to 100). Required if action is "set", optional if action is "up" or "down".',
-                    },
-                },
-                'required': ['action'],
-            },
-        },
-    }
-]
+@app.post("/api/passdown")
+async def add_passdown_entry(entry: PassdownEntry):
+    entries = load_passdown_entries()
+    new_entry = entry.dict()
+    if not new_entry.get("id"):
+        new_entry["id"] = f"WO-{int(datetime.now().timestamp())}"
+    if not new_entry.get("timestamp"):
+        new_entry["timestamp"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    entries.insert(0, new_entry)
+    save_passdown_entries(entries)
+    return {"success": True, "entry": new_entry}
 
-@app.post("/api/chat/stream")
-async def chat_stream(request: ChatRequest):
+@app.delete("/api/passdown/{entry_id}")
+async def delete_passdown_entry(entry_id: str):
+    entries = load_passdown_entries()
+    entries = [e for e in entries if e.get("id") != entry_id]
+    save_passdown_entries(entries)
+    return {"success": True}
+
+@app.post("/api/passdown/generate")
+async def generate_passdown_summary(req: PassdownGenerateRequest):
+    """
+    Synthesize shift entries into an executive Amazon RME passdown report.
+    """
     try:
+        entries = req.entries if req.entries is not None else load_passdown_entries()
+        if not entries:
+            return {"summary": "No entries logged for this shift yet."}
 
+        client = get_gemini_client()
+        content = f"SHIFT: {req.shift_name}\nFACILITY: Amazon MCC1 (Rancho Cordova Cross-Dock)\n\nLOGGED WORK ORDERS:\n"
+        for idx, item in enumerate(entries, 1):
+            e = item.dict() if hasattr(item, "dict") else item
+            content += f"{idx}. [{e.get('severity', 'MEDIUM')}] Asset: {e.get('asset_id')} ({e.get('equipment_type')}) - Problem: {e.get('problem')} - Fix: {e.get('action_taken')} - Parts: {e.get('parts_used')} - DT: {e.get('downtime_minutes')} min - Status: {e.get('status')}\n"
 
-        # Handle Ollama models
-        formatted_messages = []
-        if request.system_prompt:
-            formatted_messages.append({"role": "system", "content": request.system_prompt})
-        
-        for msg in request.messages:
-            role = msg.role if hasattr(msg, 'role') else msg.get('role')
-            content = msg.content if hasattr(msg, 'content') else msg.get('content')
-            formatted_messages.append({"role": role, "content": content})
-
-        logger.info(f"Sending async streaming request to Ollama using model: {request.model}")
-        
-        import ollama
-        client = ollama.AsyncClient()
-        use_tools = True
-        
-        async def ollama_event_generator():
-            nonlocal formatted_messages, use_tools
-            for _ in range(3):
-                try:
-                    if use_tools:
-                        stream = await client.chat(
-                            model=request.model,
-                            messages=formatted_messages,
-                            tools=OLLAMA_TOOLS,
-                            stream=True
-                        )
-                    else:
-                        stream = await client.chat(
-                            model=request.model,
-                            messages=formatted_messages,
-                            stream=True
-                        )
-                    first_chunk = await anext(stream)
-                except StopAsyncIteration:
-                    break
-                except Exception as e:
-                    err_str = str(e)
-                    if use_tools and ("support tools" in err_str or "400" in err_str):
-                        logger.warning(f"Model {request.model} does not support tools. Retrying without tools.")
-                        use_tools = False
-                        continue
-                    else:
-                        raise e
-                
-                msg = first_chunk.message
-                if hasattr(msg, 'tool_calls') and msg.tool_calls:
-                    tool_calls = msg.tool_calls
-                    async for chunk in stream:
-                        if hasattr(chunk.message, 'tool_calls') and chunk.message.tool_calls:
-                            tool_calls.extend(chunk.message.tool_calls)
-                            
-                    logger.info(f"Jarvis is calling tools: {tool_calls}")
-                    
-                    assistant_msg = {
-                        "role": "assistant",
-                        "content": "",
-                        "tool_calls": [
-                            {
-                                "function": {
-                                    "name": tc.function.name,
-                                    "arguments": tc.function.arguments
-                                }
-                            } for tc in tool_calls
-                        ]
-                    }
-                    formatted_messages.append(assistant_msg)
-                    
-                    for tool in tool_calls:
-                        tool_name = tool.function.name
-                        tool_args = tool.function.arguments
-                        if tool_name in AVAILABLE_TOOLS:
-                            func = AVAILABLE_TOOLS[tool_name]
-                            try:
-                                result = func(**tool_args)
-                            except Exception as e:
-                                result = f"Error executing tool: {e}"
-                        else:
-                            result = f"Error: Tool '{tool_name}' not recognized."
-                            
-                        logger.info(f"Tool {tool_name} result: {result}")
-                        formatted_messages.append({
-                            "role": "tool",
-                            "content": result,
-                            "name": tool_name
-                        })
-                    
-                    while ACTIVE_TOOL_CALLS:
-                        tc = ACTIVE_TOOL_CALLS.pop(0)
-                        yield f"[TOOL] {tc['name']}({tc['params']})\n"
-                        
-                    continue
-                else:
-                    buffer = ""
-                    if hasattr(first_chunk.message, 'content') and first_chunk.message.content:
-                        buffer += first_chunk.message.content
-                        
-                    async for chunk in stream:
-                        if hasattr(chunk.message, 'content') and chunk.message.content:
-                            buffer += chunk.message.content
-                            while True:
-                                boundary_idx = -1
-                                for i in range(len(buffer)):
-                                    if buffer[i] in ['.', '!', '?', '\n']:
-                                        if i + 1 == len(buffer) or buffer[i+1].isspace():
-                                            boundary_idx = i
-                                            break
-                                if boundary_idx != -1:
-                                    sentence = buffer[:boundary_idx+1].strip()
-                                    buffer = buffer[boundary_idx+1:]
-                                    if sentence:
-                                        cleaned = clean_text_for_speech(sentence)
-                                        if cleaned:
-                                            yield cleaned + "\n"
-                                else:
-                                    break
-                    if buffer.strip():
-                        cleaned = clean_text_for_speech(buffer.strip())
-                        if cleaned:
-                            yield cleaned + "\n"
-                    break
-                    
-        return StreamingResponse(ollama_event_generator(), media_type="text/plain")
-        
+        response = client.models.generate_content(
+            model="gemini-2.5-flash",
+            contents=[content],
+            config=types.GenerateContentConfig(
+                system_instruction=PASSDOWN_PROMPT,
+                temperature=0.3
+            )
+        )
+        return {"summary": response.text}
     except Exception as e:
-        logger.error(f"Error in streaming chat completion: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-@app.post("/api/chat")
-async def chat(request: ChatRequest):
-    try:
-
-
-        # Construct the messages list with the system prompt first
-        formatted_messages = []
-        if request.system_prompt:
-            formatted_messages.append({"role": "system", "content": request.system_prompt})
-        
-        for msg in request.messages:
-            # Handle standard dictionaries or ChatMessage models
-            role = msg.role if hasattr(msg, 'role') else msg.get('role')
-            content = msg.content if hasattr(msg, 'content') else msg.get('content')
-            formatted_messages.append({"role": role, "content": content})
-
-        logger.info(f"Sending request to Ollama using model: {request.model}")
-        
-        # Tool execution loop
-        use_tools = True
-        for _ in range(3):
-            try:
-                if use_tools:
-                    response = ollama.chat(
-                        model=request.model,
-                        messages=formatted_messages,
-                        tools=OLLAMA_TOOLS
-                    )
-                else:
-                    response = ollama.chat(
-                        model=request.model,
-                        messages=formatted_messages
-                    )
-            except Exception as e:
-                err_str = str(e)
-                # Catch 400 Bad Request or tool-support errors
-                if "support tools" in err_str or "400" in err_str:
-                    logger.warning(f"Model {request.model} does not support tools. Retrying without tools.")
-                    use_tools = False
-                    response = ollama.chat(
-                        model=request.model,
-                        messages=formatted_messages
-                    )
-                else:
-                    raise e
-            
-            message = response.message
-            
-            # Check if model requested any tool executions
-            if hasattr(message, 'tool_calls') and message.tool_calls:
-                formatted_messages.append(message)  # Add model's tool calls to context
-                
-                for tool in message.tool_calls:
-                    tool_name = tool.function.name
-                    tool_args = tool.function.arguments
-                    logger.info(f"Jarvis is calling tool '{tool_name}' with args: {tool_args}")
-                    
-                    if tool_name in AVAILABLE_TOOLS:
-                        func = AVAILABLE_TOOLS[tool_name]
-                        try:
-                            result = func(**tool_args)
-                        except Exception as e:
-                            result = f"Error executing tool: {e}"
-                    else:
-                        result = f"Error: Tool '{tool_name}' not recognized."
-                        
-                    logger.info(f"Tool execution result: {result}")
-                    
-                    # Feed tool execution result back to context
-                    formatted_messages.append({
-                        "role": "tool",
-                        "content": result,
-                        "name": tool_name
-                    })
-                # Re-submit history to continue generation
-                continue
-                
-            ai_response = message.content
-            logger.info(f"Ollama response: {ai_response}")
-            return {"response": clean_text_for_speech(ai_response)}
-            
-        return {"response": clean_text_for_speech(response.message.content)}
-        
-    except Exception as e:
-        logger.error(f"Error in chat completion: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.error(f"Error generating passdown summary: {e}")
+        return JSONResponse(status_code=500, content={"error": str(e)})
 
 @app.get("/api/tts")
 async def text_to_speech(
-    text: str = Query(..., description="Text to synthesize"),
-    voice: str = Query("en-GB-RyanNeural", description="Voice ID to use"),
-    rate: str = Query("+10%", description="Rate of speech (e.g. +10%, -5%)")
+    text: str = Query(..., description="Text to synthesize for technician"),
+    voice: str = Query("en-US-GuyNeural", description="Natural voice ID"),
+    rate: str = Query("+5%", description="Playback rate")
 ):
+    """
+    Stream clear technical audio readout for Bluetooth headsets.
+    """
     if not text.strip():
         raise HTTPException(status_code=400, detail="Text cannot be empty")
-        
+
     try:
-        logger.info(f"Synthesizing text with voice {voice} (rate {rate}): {text[:50]}...")
-        
-        # We can stream the audio bytes directly
+        # Clean text for crisp audio
+        cleaned = re.sub(r'[*_#`]', '', text)
         async def audio_generator():
-            communicate = edge_tts.Communicate(text, voice, rate=rate)
+            communicate = edge_tts.Communicate(cleaned, voice, rate=rate)
             async for chunk in communicate.stream():
                 if chunk["type"] == "audio":
                     yield chunk["data"]
-                    
+
         return StreamingResponse(audio_generator(), media_type="audio/mpeg")
     except Exception as e:
-        logger.error(f"Error generating TTS: {e}")
+        logger.error(f"TTS Error: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
-@app.get("/api/telemetry")
-async def api_telemetry():
-    import psutil
-    try:
-        cpu_percent = psutil.cpu_percent(interval=0.1)
-        mem = psutil.virtual_memory()
-        disk = psutil.disk_usage('/')
-        
-        temp_str = "N/A"
-        try:
-            temps = psutil.sensors_temperatures()
-            if temps:
-                for key in ['coretemp', 'cpu-thermal', 'k10temp', 'acpitz']:
-                    if key in temps:
-                        temp_str = f"{temps[key][0].current}°C"
-                        break
-                if temp_str == "N/A":
-                    first_key = list(temps.keys())[0]
-                    temp_str = f"{temps[first_key][0].current}°C"
-        except Exception:
-            pass
-            
-        return {
-            "cpu": cpu_percent,
-            "ram": mem.percent,
-            "disk": disk.percent,
-            "temp": temp_str
-        }
-    except Exception as e:
-        logger.error(f"Error gathering API telemetry: {e}")
-        return {"cpu": 0, "ram": 0, "disk": 0, "temp": "N/A"}
+@app.get("/api/voices")
+async def list_voices():
+    curated_voices = [
+        {"id": "en-US-GuyNeural", "name": "Guy (Male, American Crisp)", "gender": "Male"},
+        {"id": "en-US-AriaNeural", "name": "Aria (Female, American Clear)", "gender": "Female"},
+        {"id": "en-GB-RyanNeural", "name": "Ryan (Male, British Technical)", "gender": "Male"},
+        {"id": "en-US-JennyNeural", "name": "Jenny (Female, American Pro)", "gender": "Female"}
+    ]
+    return {"voices": curated_voices}
 
-# Mount static files (must be at the end)
+@app.get("/api/config")
+async def get_config():
+    api_key = os.getenv("GEMINI_API_KEY", "")
+    masked_key = f"{api_key[:6]}...{api_key[-4:]}" if len(api_key) > 10 else ("Configured" if api_key else "Missing")
+    return {
+        "site": "Amazon MCC1 (Rancho Cordova Cross-Dock)",
+        "facility_type": "Inbound Cross-Dock (IXD)",
+        "gemini_configured": bool(api_key),
+        "masked_key": masked_key,
+        "model": "gemini-2.5-flash"
+    }
+
+@app.post("/api/config")
+async def update_config(data: Dict[str, str] = Body(...)):
+    new_key = data.get("gemini_api_key")
+    if new_key:
+        os.environ["GEMINI_API_KEY"] = new_key
+        # Update .env file
+        try:
+            with open(".env", "w") as f:
+                f.write(f"GEMINI_API_KEY={new_key}\n")
+        except Exception as e:
+            logger.warning(f"Could not persist to .env: {e}")
+    return {"success": True, "gemini_configured": bool(os.getenv("GEMINI_API_KEY"))}
+
+# Mount static directory for PWA
 app.mount("/", StaticFiles(directory="static"), name="static")
 
 if __name__ == "__main__":
