@@ -845,10 +845,10 @@ function renderDiagnosticResult(data) {
           </button>
         </div>
         <div class="step-instruction">${s.instruction}</div>
+        ${s.visual_reference ? `<div class="step-image-wrap"><img src="images/${s.visual_reference}" alt="Visual Reference" class="step-visual-img" /></div>` : ''}
         ${s.specs ? `<div class="step-spec-callout">⚡ SPEC: ${s.specs}</div>` : ''}
         ${s.safety_note ? `<div style="color:var(--danger-red); font-size:0.8rem; font-weight:700;">⚠️ ${s.safety_note}</div>` : ''}
         ${s.pro_tip ? `<div class="step-protip">💡 <strong>MCC1 Pro-Tip:</strong> ${s.pro_tip}</div>` : ''}
-        ${s.visual_reference ? `<div class="step-image-wrap"><img src="images/${s.visual_reference}" alt="Visual Reference" class="step-visual-img" /></div>` : ''}
       </div>
     `;
 
