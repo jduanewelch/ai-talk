@@ -375,7 +375,8 @@ body {
   border-radius: var(--radius-md);
   position: relative;
   overflow: hidden;
-  aspect-ratio: 16 / 10;
+  aspect-ratio: 21 / 9;
+  max-height: 260px;
   display: flex;
   align-items: center;
   justify-content: center;
