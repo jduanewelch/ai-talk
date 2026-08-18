@@ -1023,6 +1023,22 @@ body {
   gap: 6px;
 }
 
+.step-image-wrap {
+  margin-top: 8px;
+  border-radius: var(--radius-md);
+  overflow: hidden;
+  border: 2px solid var(--border-medium);
+  background: #020617;
+  display: flex;
+  justify-content: center;
+}
+
+.step-visual-img {
+  max-width: 100%;
+  max-height: 220px;
+  object-fit: cover;
+}
+
 /* Post-Resolution Action Buttons */
 .resolution-action-bar {
   display: grid;
