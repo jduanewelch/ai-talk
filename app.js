@@ -546,7 +546,7 @@ async function callDirectGemini(systemInstruction, userText, imageBase64) {
     }
   }
 
-  const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${apiKey}`;
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash:generateContent?key=${apiKey}`;
   
   const parts = [];
   if (imageBase64) {
@@ -1074,7 +1074,7 @@ async function generatePassdownSummary() {
         state.geminiApiKey = apiKey;
         localStorage.setItem('rme_gemini_api_key', apiKey);
       }
-      const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${apiKey}`, {
+      const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash:generateContent?key=${apiKey}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({

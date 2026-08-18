@@ -254,7 +254,7 @@ EQUIPMENT DIAGNOSTIC REQUEST:
         logger.info(f"Submitting diagnostic request for {req.category} at {req.line_id}")
 
         response = client.models.generate_content(
-            model="gemini-2.5-flash",
+            model="gemini-3.5-flash",
             contents=contents,
             config=types.GenerateContentConfig(
                 system_instruction=RME_SYSTEM_PROMPT,
@@ -295,7 +295,7 @@ async def ocr_nameplate(req: OCRRequest):
         ]
 
         response = client.models.generate_content(
-            model="gemini-2.5-flash",
+            model="gemini-3.5-flash",
             contents=contents,
             config=types.GenerateContentConfig(
                 system_instruction=OCR_PROMPT,
@@ -352,7 +352,7 @@ async def generate_passdown_summary(req: PassdownGenerateRequest):
             content += f"{idx}. [{e.get('severity', 'MEDIUM')}] Asset: {e.get('asset_id')} ({e.get('equipment_type')}) - Problem: {e.get('problem')} - Fix: {e.get('action_taken')} - Parts: {e.get('parts_used')} - DT: {e.get('downtime_minutes')} min - Status: {e.get('status')}\n"
 
         response = client.models.generate_content(
-            model="gemini-2.5-flash",
+            model="gemini-3.5-flash",
             contents=[content],
             config=types.GenerateContentConfig(
                 system_instruction=PASSDOWN_PROMPT,
@@ -409,7 +409,7 @@ async def get_config():
         "facility_type": "Inbound Cross-Dock (IXD)",
         "gemini_configured": bool(api_key),
         "masked_key": masked_key,
-        "model": "gemini-2.5-flash"
+        "model": "gemini-3.5-flash"
     }
 
 @app.post("/api/config")
