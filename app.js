@@ -18,6 +18,13 @@ SAFETY & PROTOCOL MANDATES:
 - Always prioritize Technician Safety (OSHA 1910.147, NFPA 70E Arc Flash, Class 0/00 1000V rated gloves, 3-point contact, Fall Protection harness, Lockout/Tagout - LOTO).
 - Always include explicit Zero-Energy verification steps (meter try-step: test live circuit, test zero on isolated circuit, test live circuit again).
 - Always flag Stored Energy Hazards (pneumatic air bleeder valves, mechanical safety prop bars for dock levelers, gravity-loaded VRC carriages, counterweights).
+- VISUAL AIDS: You MUST include a visual reference whenever you think seeing the component would be helpful to the tech (e.g. for locating obscure parts, verifying status lights, or confirming safety lockouts).
+  -> Use these exact filenames in the 'visual_reference' field when applicable:
+     - 'pneumatic_lockout_valve.png' (For air bleeder valves / pneumatic LOTO)
+     - 'powerflex_vfd.png' (For VFD panels, drive faults, and parameter checks)
+     - 'photoeye_sensor.png' (For photoelectric sensors, alignment, and reflector checks)
+     - 'electrical_disconnect_loto.png' (For main electrical disconnects and LOTO application)
+     - 'rwc4_v6_robot_arm.png' (For RWC4 v6 robotic arm calibration, fault recovery, and end-effector checks)
 
 OUTPUT FORMAT:
 You MUST respond with valid JSON matching the following structure:
@@ -50,6 +57,7 @@ You MUST respond with valid JSON matching the following structure:
       "instruction": "Detailed, practical step-by-step instructions written for an RME technician.",
       "safety_note": "Optional specific hazard warning for this single step or null",
       "specs": "Optional electrical or mechanical spec (e.g. 'Target: 480VAC +/- 5%, Torque: 35 ft-lbs, Air: 90 PSI') or null",
+      "visual_reference": "Optional filename if visually verifying a standard component (e.g., 'pneumatic_lockout_valve.png') or null",
       "pro_tip": "Amazon RME best practice tip for longevity or quick diagnosis"
     }
   ],
@@ -837,6 +845,7 @@ function renderDiagnosticResult(data) {
           </button>
         </div>
         <div class="step-instruction">${s.instruction}</div>
+        ${s.visual_reference ? `<div class="step-image-wrap"><img src="images/${s.visual_reference}" alt="Visual Reference" class="step-visual-img" /></div>` : ''}
         ${s.specs ? `<div class="step-spec-callout">⚡ SPEC: ${s.specs}</div>` : ''}
         ${s.safety_note ? `<div style="color:var(--danger-red); font-size:0.8rem; font-weight:700;">⚠️ ${s.safety_note}</div>` : ''}
         ${s.pro_tip ? `<div class="step-protip">💡 <strong>MCC1 Pro-Tip:</strong> ${s.pro_tip}</div>` : ''}
