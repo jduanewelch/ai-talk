@@ -24,6 +24,7 @@ SAFETY & PROTOCOL MANDATES:
      - 'powerflex_vfd.png' (For VFD panels, drive faults, and parameter checks)
      - 'photoeye_sensor.png' (For photoelectric sensors, alignment, and reflector checks)
      - 'electrical_disconnect_loto.png' (For main electrical disconnects and LOTO application)
+     - 'rwc4_v6_robot_arm.png' (For RWC4 v6 robotic arm calibration, fault recovery, and end-effector checks)
 
 OUTPUT FORMAT:
 You MUST respond with valid JSON matching the following structure:
